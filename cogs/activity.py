@@ -24,19 +24,18 @@ class Activity(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None or not message.content:
+        if message.author.bot or message.guild is None:
+            return
+        if not message.content and not message.attachments:
             return
         if message.content.startswith(self.bot.command_prefix):
-            return  # bot commands are not "activity" and make poor throwbacks
+            return  # bot commands are not "activity"
         try:
+            # Only a counter is bumped: the message text is never stored.
             await self.bot.db.record_message(
-                id=message.id,
                 guild_id=message.guild.id,
-                channel_id=message.channel.id,
                 user_id=message.author.id,
-                author_name=message.author.display_name,
-                content=message.content,
-                created_at=message.created_at,
+                username=message.author.display_name,
             )
         except Exception:
             log.exception("Failed to record message %s", message.id)

@@ -6,7 +6,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import REPLY_GROUPS, format_duration, pick_mention_reply, pick_reply, truncate  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from helpers import (  # noqa: E402
+    REPLY_GROUPS, TopN, clean_candidate, format_duration, pick_mention_reply, pick_reply,
+    random_window, score_message, truncate,
+)
 
 
 def test_pick_reply_matches_trigger():
@@ -45,6 +50,52 @@ def test_truncate():
     assert truncate("hello", 10) == "hello"
     assert len(truncate("x" * 100, 10)) == 10
     assert truncate("x" * 100, 10).endswith("…")
+
+
+def test_clean_candidate():
+    assert clean_candidate("this is a perfectly normal message") == "this is a perfectly normal message"
+    assert clean_candidate("  padded message that is long enough  ") == "padded message that is long enough"
+    assert clean_candidate("too short") is None
+    assert clean_candidate("x" * 601) is None
+    assert clean_candidate("!mystats and some more words here") is None
+    assert clean_candidate("/something that looks like a slash command") is None
+    assert clean_candidate("https://example.com/some/long/link/here") is None
+    assert clean_candidate("https://a.example/x https://b.example/y") is None
+    assert clean_candidate("hey @everyone look at this message") is None
+    assert clean_candidate(None) is None
+
+
+def test_score_prefers_reactions():
+    import random
+    rng = random.Random(7)
+    popular = score_message(10, 50, rng)
+    quiet = max(score_message(0, 300, rng) for _ in range(200))
+    assert popular > quiet
+
+
+def test_random_window_stays_in_range():
+    import random
+    rng = random.Random(3)
+    earliest = datetime(2016, 10, 17, tzinfo=timezone.utc)
+    latest = datetime(2026, 10, 4, tzinfo=timezone.utc)
+    for _ in range(500):
+        start, end = random_window(earliest, latest, 30, rng)
+        assert earliest <= start and end <= latest
+        assert end - start == timedelta(days=30)
+
+
+def test_random_window_young_server():
+    earliest = datetime(2026, 9, 25, tzinfo=timezone.utc)
+    latest = datetime(2026, 10, 4, tzinfo=timezone.utc)
+    assert random_window(earliest, latest, 30) == (earliest, latest)
+
+
+def test_topn_keeps_best_and_never_compares_items():
+    top = TopN(3)
+    for i, score in enumerate([5, 1, 9, 9, 3, 7, 2]):
+        top.push(score, {"id": i})  # dicts are not orderable: would raise if compared
+    assert [item["id"] for item in top.best()] in ([2, 3, 5], [3, 2, 5])
+    assert len(top) == 3
 
 
 if __name__ == "__main__":

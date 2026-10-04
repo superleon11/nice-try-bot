@@ -1,5 +1,11 @@
-"""Throwback of the Day, plus a backfill command to import old history."""
+"""Throwback of the Day.
 
+Once a day the bot reads a random 30-day slice of ONE channel's history straight from Discord,
+picks one of the best (most-reacted) messages, posts it in that channel, and forgets everything
+it read.
+"""
+
+import asyncio
 import logging
 import os
 from datetime import time as dtime, timezone
@@ -7,6 +13,7 @@ from datetime import time as dtime, timezone
 import discord
 from discord.ext import commands, tasks
 
+from archive import find_throwback
 from helpers import truncate
 
 log = logging.getLogger(__name__)
@@ -24,16 +31,20 @@ def _env_int(name: str, default: int) -> int:
 class Throwback(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # The one channel the bot posts in. Unless THROWBACK_SOURCE_CHANNEL_ID says otherwise,
+        # it is also the one channel the bot reads history from.
         self.channel_id = _env_int("THROWBACK_CHANNEL_ID", 0)
+        self.source_id = _env_int("THROWBACK_SOURCE_CHANNEL_ID", 0) or self.channel_id
+        self.window_days = max(1, _env_int("THROWBACK_WINDOW_DAYS", 30))
         hour = _env_int("THROWBACK_HOUR_UTC", 12) % 24
         self.daily.change_interval(time=dtime(hour=hour, tzinfo=timezone.utc))
-        self._backfilling: set[int] = set()
+        self._lock = asyncio.Lock()  # one scan at a time
 
     async def cog_load(self) -> None:
         if self.channel_id:
             self.daily.start()
         else:
-            log.warning("THROWBACK_CHANNEL_ID not set: daily throwback disabled (!throwback still works)")
+            log.warning("THROWBACK_CHANNEL_ID not set: the throwback is disabled")
 
     async def cog_unload(self) -> None:
         self.daily.cancel()
@@ -42,85 +53,74 @@ class Throwback(commands.Cog):
 
     @tasks.loop(time=dtime(hour=12, tzinfo=timezone.utc))
     async def daily(self) -> None:
-        channel = self.bot.get_channel(self.channel_id)
-        if channel is None:
-            log.error("Throwback channel %s not found (is the bot in that server?)", self.channel_id)
-            return
         try:
-            await self.post_throwback(channel)
+            problem = await self.post_throwback()
         except Exception:
             # Never let one failure kill the loop.
             log.exception("Daily throwback failed")
+            return
+        if problem:
+            log.error("Daily throwback not posted: %s", problem)
 
     @daily.before_loop
     async def _before_daily(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def post_throwback(self, channel: discord.abc.Messageable) -> bool:
-        row = await self.bot.db.random_message(channel.guild.id)
-        if row is None:
-            return False
-        url = f"https://discord.com/channels/{channel.guild.id}/{row['channel_id']}/{row['id']}"
+    async def post_throwback(self) -> str | None:
+        """Post a throwback. Returns None on success, or a short reason it could not."""
+        target = self.bot.get_channel(self.channel_id)
+        source = self.bot.get_channel(self.source_id)
+        if not isinstance(target, discord.TextChannel):
+            return f"I can't find the throwback channel ({self.channel_id}). Is the ID right, and is the bot in that server?"
+        if not isinstance(source, discord.TextChannel):
+            return f"I can't find the channel to read history from ({self.source_id})."
+        if source.is_nsfw() and not target.is_nsfw():
+            return ("The channel I read from is NSFW but the one I post in is not, "
+                    "so I won't repost its messages there.")
+        perms = source.permissions_for(source.guild.me)
+        if not (perms.view_channel and perms.read_message_history):
+            return f"I don't have View Channel + Read Message History permission in #{source.name}."
+
+        async with self._lock:
+            found = await find_throwback(source.guild, [source], self.bot.command_prefix, self.window_days)
+        if found is None:
+            return "I couldn't find anything good to post this time."
+
+        m = found.message
         embed = discord.Embed(
             title="📼 Throwback of the Day",
-            description=truncate(row["content"], 1500),
+            description=truncate(found.text, 1500),
             colour=discord.Colour.gold(),
         )
-        embed.add_field(name="From", value=discord.utils.escape_markdown(row["author_name"]))
-        embed.add_field(name="In", value=f"<#{row['channel_id']}>")
-        embed.add_field(name="When", value=discord.utils.format_dt(row["created_at"], "D"))
-        embed.add_field(name="​", value=f"[Jump to message]({url})", inline=False)
-        await channel.send(embed=embed)
-        return True
+        embed.add_field(name="From", value=discord.utils.escape_markdown(m.author.display_name))
+        if m.channel.id != target.id:
+            embed.add_field(name="In", value=f"<#{m.channel.id}>")
+        embed.add_field(name="When", value=discord.utils.format_dt(m.created_at, "D"))
+        if found.reactions:
+            embed.add_field(name="Reactions", value=f"⭐ {found.reactions}")
+        embed.add_field(name="​", value=f"[Jump to message]({m.jump_url})", inline=False)
+        await target.send(embed=embed)
+        return None
 
-    # ---- commands -------------------------------------------------------
+    # ---- command --------------------------------------------------------
 
     @commands.command(name="throwback")
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
     async def throwback(self, ctx: commands.Context) -> None:
-        """Post a throwback right now (handy for testing)."""
-        if not await self.post_throwback(ctx.channel):
-            await ctx.send("I don't have any stored messages yet. Try `!backfill` first.")
-
-    @commands.command(name="backfill")
-    @commands.guild_only()
-    @commands.has_permissions(administrator=True)
-    async def backfill(self, ctx: commands.Context) -> None:
-        """Import this server's existing message history (can take a while)."""
-        guild = ctx.guild
-        if guild.id in self._backfilling:
-            await ctx.send("A backfill is already running for this server.")
+        """Dig up a throwback right now (can take a minute or two). It posts in the throwback channel."""
+        if not self.channel_id:
+            await ctx.send("THROWBACK_CHANNEL_ID isn't set, so I don't know which channel to use.")
             return
-        self._backfilling.add(guild.id)
-        try:
-            await ctx.send("Importing message history. This can take a while, I'll post when it's done.")
-            seen = 0
-            for channel in guild.text_channels:
-                perms = channel.permissions_for(guild.me)
-                if not (perms.view_channel and perms.read_message_history):
-                    continue
-                batch: list[tuple] = []
-                try:
-                    async for m in channel.history(limit=None, oldest_first=True):
-                        if m.author.bot or not m.content or m.content.startswith(self.bot.command_prefix):
-                            continue
-                        batch.append((m.id, guild.id, channel.id, m.author.id,
-                                      m.author.display_name, m.content, m.created_at))
-                        if len(batch) >= 500:
-                            await self.bot.db.insert_messages_bulk(batch)
-                            seen += len(batch)
-                            batch = []
-                except discord.Forbidden:
-                    log.warning("No access to history of #%s", channel.name)
-                    continue
-                if batch:
-                    await self.bot.db.insert_messages_bulk(batch)
-                    seen += len(batch)
-            await self.bot.db.rebuild_message_counts(guild.id)
-            await ctx.send(f"Done! Processed {seen:,} messages. Message counts have been rebuilt.")
-        finally:
-            self._backfilling.discard(guild.id)
+        if self._lock.locked():
+            await ctx.send("I'm already digging through the archives, give me a moment.")
+            return
+        await ctx.send("📼 Digging through the archives… this can take a minute or two.")
+        problem = await self.post_throwback()
+        if problem:
+            await ctx.send(problem)
+        elif ctx.channel.id != self.channel_id:
+            await ctx.send(f"Posted in <#{self.channel_id}>.")
 
 
 async def setup(bot: commands.Bot) -> None:

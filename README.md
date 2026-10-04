@@ -10,11 +10,20 @@ Only three dependencies: `discord.py`, `asyncpg`, `python-dotenv`. Tables are cr
 |---|---|---|
 | `!mystats` | anyone | your messages, voice time and ranks |
 | `!leaderboard [messages\|voice\|combined]` (`!lb`) | anyone | top 10 (combined = messages + voice minutes) |
-| `!backfill` | administrators | import the server's existing message history (run once) |
-| `!throwback` | Manage Server | post a throwback right now |
+| `!throwback` | Manage Server | dig up a throwback right now (takes a minute or two on a big server) |
 | `!soundtest` | Manage Server | join your current voice channel now, play a soundboard clip, leave |
 
 Mentioning the bot always gets a reply. Keyword replies are limited to one per channel every 5 minutes, and fire about half the time.
+
+## Throwback of the Day
+
+The bot works with **one channel**, the one you set in `THROWBACK_CHANNEL_ID`. Once a day it picks a random 30-day window between when that channel was created and now, reads that slice of the channel's history straight from Discord, picks one of the best messages in it, posts it in the same channel, and forgets everything it read. **No message history is stored in the database.** NSFW channels work fine.
+
+"Best" means most reactions, with a small bonus for length and some randomness. It skips bots, commands, link-only messages, very short or very long messages and `@everyone`/`@here` messages, and then picks randomly from the top 10 so you don't always get the same message. If a window is empty or quiet (early years, say), it tries another window, up to 6 times. Threads are not searched.
+
+The bot needs **View Channel**, **Read Message History** and **Send Messages** in that channel. `!throwback` always posts in the throwback channel, wherever you type it.
+
+Options: `THROWBACK_CHANNEL_ID`, `THROWBACK_HOUR_UTC`, `THROWBACK_WINDOW_DAYS` (default 30), and optionally `THROWBACK_SOURCE_CHANNEL_ID` to read history from a different channel than the one it posts in. For safety, the bot refuses to post if the channel it reads from is NSFW and the one it posts in isn't.
 
 ## Soundboard visits
 
@@ -53,12 +62,13 @@ python main.py
    - `THROWBACK_CHANNEL_ID` = the channel ID
    - optional: `THROWBACK_HOUR_UTC` (default 12), `BOT_PREFIX` (default `!`)
 4. Start command: `python main.py` (the included `Procfile` says this too).
-5. Look for `Logged in as ...` in the deploy logs, then run `!backfill` in your server.
+5. Look for `Logged in as ...` in the deploy logs, then try `!throwback` in your server.
 
 `.python-version` pins Python 3.12 so every dependency has prebuilt wheels. If Railway complains about it, delete that file.
 
 ## Notes
 
 - Voice sessions are timed in memory; they're saved when someone leaves voice or the bot shuts down cleanly. A hard crash loses sessions that were open at that moment.
-- Message text is stored in your database so the throwback can pull from it. Command messages (starting with the prefix) and bot messages are not stored.
-- Tests: `python tests/test_helpers.py` and `python tests/test_soundboard_logic.py`.
+- The database only holds per-user counters (message count and voice time). Message text is never stored.
+- `!mystats` and `!leaderboard` only count activity from when the bot was added. They do not include old history.
+- Tests: `python tests/test_helpers.py`, `python tests/test_archive.py` and `python tests/test_soundboard_logic.py`.

@@ -1,7 +1,10 @@
 """Pure helper functions (no discord / database imports) so they are easy to test."""
 
+import heapq
+import itertools
 import random
 import re
+from datetime import datetime, timedelta
 
 # (trigger words, replies). First matching group wins; a random reply is picked from it.
 REPLY_GROUPS = [
@@ -99,3 +102,63 @@ def truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+# ---- throwback helpers ----------------------------------------------------------------------
+
+_URL_ONLY_RE = re.compile(r"^(https?://\S+\s*)+$")
+_MASS_MENTIONS = ("@everyone", "@here")
+
+
+def clean_candidate(content: str | None, prefix: str = "!",
+                    min_len: int = 15, max_len: int = 600) -> str | None:
+    """Return the message text if it is worth considering for a throwback, else None."""
+    text = (content or "").strip()
+    if not (min_len <= len(text) <= max_len):
+        return None
+    if text.startswith(prefix) or text.startswith("/"):
+        return None  # bot commands
+    if _URL_ONLY_RE.match(text):
+        return None  # just a link
+    if any(m in text for m in _MASS_MENTIONS):
+        return None
+    return text
+
+
+def score_message(reactions: int, length: int, rng: random.Random = random) -> float:
+    """Higher = more likely to be a good throwback. Reactions dominate; a little length and luck."""
+    length_bonus = min(length, 300) / 150  # at most 2 points
+    return reactions * 3 + length_bonus + rng.random()
+
+
+def random_window(earliest: datetime, latest: datetime, days: int = 30,
+                  rng: random.Random = random) -> tuple[datetime, datetime]:
+    """A random span of `days` days that lies between earliest and latest."""
+    span = timedelta(days=days)
+    if latest - earliest <= span:
+        return earliest, latest
+    start = earliest + (latest - span - earliest) * rng.random()
+    return start, start + span
+
+
+class TopN:
+    """Keeps only the N highest-scoring items, so we never hold a whole window in memory."""
+
+    def __init__(self, n: int):
+        self.n = n
+        self._heap: list = []
+        self._counter = itertools.count()  # tie-breaker so items themselves are never compared
+
+    def push(self, score: float, item) -> None:
+        entry = (score, next(self._counter), item)
+        if len(self._heap) < self.n:
+            heapq.heappush(self._heap, entry)
+        elif score > self._heap[0][0]:
+            heapq.heapreplace(self._heap, entry)
+
+    def best(self) -> list:
+        """Items, best first."""
+        return [item for _, _, item in sorted(self._heap, reverse=True)]
+
+    def __len__(self) -> int:
+        return len(self._heap)
