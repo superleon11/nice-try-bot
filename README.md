@@ -50,6 +50,10 @@ DELETE FROM user_notes WHERE id = 12;
 
 **How it learns.** By default the bot only listens to messages addressed to it (mentions and replies). Set `LLM_LEARN_SCOPE=all` and it listens to everything said in the server, which gives richer notes but costs more. Messages are kept in memory only, and once a day (`LLM_MEMORY_HOUR_UTC`, default 04:00 UTC) the model turns them into short notes and they are discarded. Anyone with fewer than 3 messages is kept for the next day. A redeploy or restart loses whatever is still waiting. Use `!learnnow` to run it on demand.
 
+**Follow-ups without an @.** Replying to one of the bot's messages (Discord's reply button) always counts as talking to it. On top of that, after the bot replies to you, your next messages in that channel within 3 minutes (`LLM_CONVO_WINDOW_SECONDS=180`) count too, so you can just keep typing. Each exchange extends the window, and it only applies to you: other people still need an @ or a reply. It ignores a message that mentions someone else or replies to someone else's message. Set it to `0` to switch it off.
+
+**Chiming in unprompted.** The bot also occasionally replies to messages that don't mention it. By default about 5% of messages (`LLM_RANDOM_REPLY_CHANCE=0.05`), with at least 5 minutes between chime-ins in a channel (`LLM_RANDOM_COOLDOWN_SECONDS=300`), in every channel it can see. To limit it to certain channels, set `LLM_RANDOM_CHANNEL_IDS` to a comma-separated list of channel IDs. The AI may decide it has nothing good to say and stay silent. Set the chance to `0` to switch this off. Over the cost cap, it falls back to the old canned keyword replies (so those only run when unprompted replies are off or the cap is hit). Each chime-in counts toward the spending cap like any other call.
+
 The bot's personality is `LLM_PERSONA` (a default is built in). The AI's replies can never ping `@everyone` or roles.
 
 ## Soundboard visits

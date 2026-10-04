@@ -12,6 +12,8 @@ Every call goes through llm.LLMClient, which enforces the daily and monthly spen
 import asyncio
 import logging
 import os
+import random
+import time
 from datetime import time as dtime, timezone
 
 import discord
@@ -19,7 +21,9 @@ from discord.ext import commands, tasks
 
 from addressing import is_addressed
 from envutil import env_float, env_int
-from helpers import MEMORY_SYSTEM, format_memory_prompt, parse_memory_update, pick_mention_reply, truncate
+from helpers import (
+    MEMORY_SYSTEM, format_memory_prompt, parse_memory_update, pick_mention_reply, pick_reply, truncate,
+)
 from llm import BudgetExceeded, LLMClient, LLMError
 
 log = logging.getLogger(__name__)
@@ -50,6 +54,16 @@ class Brain(commands.Cog):
         self.memory_model = os.getenv("LLM_MEMORY_MODEL", "").strip() or DEFAULT_MODEL
         self.learn_all = os.getenv("LLM_LEARN_SCOPE", "addressed").strip().lower() == "all"
         self.persona = os.getenv("LLM_PERSONA", "").strip() or DEFAULT_PERSONA
+        # Unprompted replies: chance per message, minimum gap per channel, optional channel whitelist.
+        self.random_chance = min(1.0, max(0.0, env_float("LLM_RANDOM_REPLY_CHANCE", 0.05)))
+        self.random_cooldown = max(0.0, env_float("LLM_RANDOM_COOLDOWN_SECONDS", 300))
+        self.random_channels = {int(x) for x in os.getenv("LLM_RANDOM_CHANNEL_IDS", "").replace(" ", "").split(",")
+                                if x.isdigit()}
+        self._last_random: dict[int, float] = {}   # channel id -> time.monotonic() of the last attempt
+        # Follow-ups: after the bot replies to someone, their next messages in that channel within
+        # this many seconds count as talking to the bot, no @ needed. 0 switches it off.
+        self.convo_window = max(0.0, env_float("LLM_CONVO_WINDOW_SECONDS", 180))
+        self._convos: dict[tuple[int, int], float] = {}   # (channel, user) -> time.monotonic() of last exchange
         self.llm: LLMClient | None = None
         if self.enabled:
             self.llm = LLMClient(
@@ -58,6 +72,8 @@ class Brain(commands.Cog):
                 monthly_cap=env_float("LLM_MONTHLY_BUDGET_USD", 10.0),
             )
         bot.brain_active = self.enabled  # tells the Fun cog to leave mentions to us
+        bot.brain_random = self.enabled and self.random_chance > 0  # ...and the keyword replies too
+        bot.brain_claims = self.is_for_me  # lets other cogs ask 'is the brain handling this message?'
         self.buffer: dict[tuple[int, int], list[str]] = {}   # (guild, user) -> recent messages
         self.names: dict[tuple[int, int], str] = {}
         self._learn_lock = asyncio.Lock()
@@ -69,9 +85,12 @@ class Brain(commands.Cog):
             log.warning("ANTHROPIC_API_KEY not set: AI features are off")
             return
         self.learn_daily.start()
-        log.info("AI on: chat model %s, memory model %s, learning from %s, caps $%.2f/day $%.2f/month",
+        log.info("AI on: chat model %s, memory model %s, learning from %s, caps $%.2f/day $%.2f/month, "
+                 "unprompted replies %.0f%% (cooldown %ds, %s), follow-up window %ds",
                  self.chat_model, self.memory_model, "everything" if self.learn_all else "messages to the bot",
-                 self.llm.daily_cap, self.llm.monthly_cap)
+                 self.llm.daily_cap, self.llm.monthly_cap, self.random_chance * 100, self.random_cooldown,
+                 f"{len(self.random_channels)} channel(s)" if self.random_channels else "all channels",
+                 self.convo_window)
 
     async def cog_unload(self) -> None:
         self.learn_daily.cancel()
@@ -86,11 +105,38 @@ class Brain(commands.Cog):
             return
         if message.content.startswith(self.bot.command_prefix):
             return
-        addressed = is_addressed(message, self.bot.user)
+        addressed = self.is_for_me(message)
         if addressed or self.learn_all:
             self._remember(message)
         if addressed:
             await self._respond(message)
+        elif self._should_chime_in(message):
+            await self._chime_in(message)
+
+    def is_for_me(self, message: discord.Message) -> bool:
+        """Is this message talking to the bot? (a mention, a reply to the bot, or a follow-up)"""
+        return is_addressed(message, self.bot.user) or self._in_conversation(message)
+
+    def _in_conversation(self, message: discord.Message) -> bool:
+        """A follow-up from someone the bot just talked to, in the same channel, without an @."""
+        if self.convo_window <= 0:
+            return False
+        last = self._convos.get((message.channel.id, message.author.id))
+        if last is None or time.monotonic() - last > self.convo_window:
+            return False
+        if any(not m.bot for m in message.mentions):
+            return False   # they are talking to somebody else
+        ref = message.reference.resolved if message.reference else None
+        if isinstance(ref, discord.Message) and ref.author.id != self.bot.user.id:
+            return False   # a Discord reply to somebody else's message
+        return True
+
+    def _mark_conversation(self, message: discord.Message) -> None:
+        """Start or extend the follow-up window for this person in this channel."""
+        now = time.monotonic()
+        self._convos[(message.channel.id, message.author.id)] = now
+        if len(self._convos) > 200:   # forget stale entries
+            self._convos = {k: t for k, t in self._convos.items() if now - t <= self.convo_window}
 
     def _remember(self, message: discord.Message) -> None:
         text = " ".join(message.clean_content.split())
@@ -104,7 +150,14 @@ class Brain(commands.Cog):
             del msgs[: len(msgs) - MAX_BUFFER_PER_USER]
         self.names[key] = message.author.display_name
 
+    async def _send(self, message: discord.Message, text: str) -> None:
+        try:
+            await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            log.warning("Could not reply in channel %s", message.channel.id, exc_info=True)
+
     async def _respond(self, message: discord.Message) -> None:
+        """Answer a message that was addressed to the bot."""
         try:
             async with message.channel.typing():
                 text = await self._chat(message)
@@ -117,12 +170,37 @@ class Brain(commands.Cog):
         except Exception:
             log.exception("Unexpected error while chatting")
             return
-        try:
-            await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
-            log.warning("Could not reply in channel %s", message.channel.id, exc_info=True)
+        await self._send(message, text)
+        self._mark_conversation(message)
 
-    async def _chat(self, message: discord.Message) -> str:
+    def _should_chime_in(self, message: discord.Message) -> bool:
+        """Should the bot jump into this (unaddressed) message? Cheap checks first, the dice last."""
+        if self.random_chance <= 0 or len(message.content.strip()) < 10:
+            return False
+        if self.random_channels and message.channel.id not in self.random_channels:
+            return False
+        last = self._last_random.get(message.channel.id, float("-inf"))
+        if time.monotonic() - last < self.random_cooldown:
+            return False
+        return random.random() < self.random_chance
+
+    async def _chime_in(self, message: discord.Message) -> None:
+        """Reply to a message nobody asked the bot about, if it has something good to say."""
+        # The cooldown starts at the attempt, so a "nothing to add" answer still limits spending.
+        self._last_random[message.channel.id] = time.monotonic()
+        try:
+            text = await self._chat(message, unprompted=True)
+        except (BudgetExceeded, LLMError) as exc:
+            log.info("No AI chime-in (%s), trying a canned keyword reply", exc)
+            text = pick_reply(message.content)   # None when no keyword matches: stay quiet
+        except Exception:
+            log.exception("Unexpected error while chiming in")
+            return
+        if text:
+            await self._send(message, text)
+            self._mark_conversation(message)   # if they answer back, carry on talking
+
+    async def _chat(self, message: discord.Message, unprompted: bool = False) -> str:
         text = " ".join(message.clean_content.split()).replace(f"@{message.guild.me.display_name}", "").strip()
         parts = []
         notes = await self._notes_block(message)
@@ -132,11 +210,18 @@ class Brain(commands.Cog):
         context = await self._recent_context(message)
         if context:
             parts.append("Recent chat (oldest first):\n" + context)
-        parts.append(f"{message.author.display_name} says to you: {text or '(just pinged you)'}")
+        if unprompted:
+            parts.append(f"{message.author.display_name} just said this in the chat (nobody asked you anything): {text}\n\n"
+                         "Chime in with one short, funny remark only if you have something genuinely good "
+                         "to add. If you don't, reply with exactly: SKIP")
+        else:
+            parts.append(f"{message.author.display_name} says to you: {text or '(just pinged you)'}")
         reply = await self.llm.complete(
             model=self.chat_model, system=self.persona, prompt="\n\n".join(parts),
-            max_tokens=300, purpose="chat",
+            max_tokens=300, purpose="chime-in" if unprompted else "chat",
         )
+        if unprompted:
+            return "" if (not reply or reply.strip().upper().startswith("SKIP")) else truncate(reply, 1900)
         return truncate(reply, 1900) if reply else pick_mention_reply()
 
     async def _notes_block(self, message: discord.Message) -> str:

@@ -29,13 +29,18 @@ class Fun(commands.Cog):
             return
 
         # When the AI brain is on, it answers anything addressed to the bot.
-        if getattr(self.bot, "brain_active", False) and is_addressed(message, self.bot.user):
-            return
+        if getattr(self.bot, "brain_active", False):
+            claims = getattr(self.bot, "brain_claims", None)
+            if (claims(message) if claims else is_addressed(message, self.bot.user)):
+                return
 
         # Otherwise always answer a direct mention with a canned line.
         if self.bot.user in message.mentions:
             await self._reply(message, pick_mention_reply())
             return
+
+        if getattr(self.bot, "brain_random", False):
+            return  # the AI brain chimes in on its own now (and falls back to these canned lines)
 
         now = time.monotonic()
         if now - self.last_reply.get(message.channel.id, float("-inf")) < COOLDOWN_SECONDS:

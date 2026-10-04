@@ -253,6 +253,162 @@ def test_batches_people_and_caps_auto_notes():
     asyncio.run(_batches_people_and_caps_auto_notes())
 
 
+# ---- unprompted replies -----------------------------------------------------------------------
+class FakeChannel:
+    def __init__(self, cid=50):
+        self.id = cid
+
+    async def history(self, limit=8, before=None):
+        return
+        yield  # makes this an (empty) async generator
+
+
+def chat_msg(text, channel_id=50):
+    sent = []
+
+    async def reply(content, **kw):
+        sent.append(content)
+
+    return types.SimpleNamespace(
+        content=text, clean_content=text, mentions=[], reference=None, reply=reply, sent=sent,
+        channel=FakeChannel(channel_id),
+        guild=types.SimpleNamespace(id=G, me=types.SimpleNamespace(display_name="FunBot")),
+        author=types.SimpleNamespace(id=5, display_name="Dave", bot=False),
+    )
+
+
+def test_should_chime_in_respects_chance_cooldown_length_and_channels():
+    cog = make_brain(FakeDB(), FakeLLM(""))
+    cog.random_chance = 1.0
+    assert cog._should_chime_in(chat_msg("this is a normal message"))
+    cog._last_random[50] = __import__("time").monotonic()          # just replied in channel 50
+    assert not cog._should_chime_in(chat_msg("this is a normal message"))
+    assert cog._should_chime_in(chat_msg("this is a normal message", channel_id=51))   # other channel is fine
+    cog._last_random.clear()
+    assert not cog._should_chime_in(chat_msg("short"))               # too short to be worth it
+    cog.random_chance = 0.0
+    assert not cog._should_chime_in(chat_msg("this is a normal message"))
+    cog.random_chance = 1.0
+    cog.random_channels = {99}
+    assert not cog._should_chime_in(chat_msg("this is a normal message", channel_id=50))
+    assert cog._should_chime_in(chat_msg("this is a normal message", channel_id=99))
+
+
+async def _chime_in_replies_when_the_ai_has_something_to_say():
+    llm = FakeLLM("That's what she said about the bike.")
+    cog = make_brain(FakeDB(), llm)
+    m = chat_msg("I finally bought that motorbike")
+    await cog._chime_in(m)
+    assert m.sent == ["That's what she said about the bike."]
+    assert llm.calls[0]["purpose"] == "chime-in" and "SKIP" in llm.calls[0]["prompt"]
+    assert 50 in cog._last_random                      # cooldown started
+
+
+async def _chime_in_stays_quiet_on_skip_but_still_starts_the_cooldown():
+    for answer in ("SKIP", "  skip.", ""):
+        cog = make_brain(FakeDB(), FakeLLM(answer))
+        m = chat_msg("just had a really boring lunch")
+        await cog._chime_in(m)
+        assert m.sent == [] and 50 in cog._last_random
+
+
+async def _chime_in_falls_back_to_canned_replies_over_budget():
+    cog = make_brain(FakeDB(), FakeLLM(error=BudgetExceeded("daily cap reached")))
+    thanks = chat_msg("thanks for sorting that out")
+    await cog._chime_in(thanks)
+    assert len(thanks.sent) == 1                       # a canned keyword reply
+    plain = chat_msg("the weather is quite grey today")
+    await cog._chime_in(plain)
+    assert plain.sent == []                            # no keyword -> stays quiet
+
+
+def test_chime_in_replies_when_the_ai_has_something_to_say():
+    asyncio.run(_chime_in_replies_when_the_ai_has_something_to_say())
+
+
+def test_chime_in_stays_quiet_on_skip_but_still_starts_the_cooldown():
+    asyncio.run(_chime_in_stays_quiet_on_skip_but_still_starts_the_cooldown())
+
+
+def test_chime_in_falls_back_to_canned_replies_over_budget():
+    asyncio.run(_chime_in_falls_back_to_canned_replies_over_budget())
+
+
+# ---- follow-up conversations ------------------------------------------------------------------
+class FakeDiscordMessage(Exception):
+    """Stands in for discord.Message (the stub makes discord.Message an Exception subclass)."""
+
+    def __init__(self, author_id):
+        super().__init__()
+        self.author = types.SimpleNamespace(id=author_id)
+
+
+def follow_up(text="and what about the second one?", channel_id=50, user_id=5, mentions=(), reply_to=None):
+    m = chat_msg(text, channel_id)
+    m.author.id = user_id
+    m.mentions = list(mentions)
+    m.reference = types.SimpleNamespace(resolved=reply_to) if reply_to is not None else None
+    return m
+
+
+def test_follow_up_works_for_the_same_person_in_the_same_channel_only():
+    import time as _t
+    cog = make_brain(FakeDB(), FakeLLM(""))
+    assert not cog._in_conversation(follow_up())                     # bot has not spoken to them yet
+    cog._convos[(50, 5)] = _t.monotonic()
+    assert cog._in_conversation(follow_up())                          # same person, same channel
+    assert not cog._in_conversation(follow_up(user_id=6))             # somebody else
+    assert not cog._in_conversation(follow_up(channel_id=51))         # another channel
+    assert cog.is_for_me(follow_up())
+
+
+def test_follow_up_expires_and_can_be_switched_off():
+    import time as _t
+    cog = make_brain(FakeDB(), FakeLLM(""))
+    cog._convos[(50, 5)] = _t.monotonic() - cog.convo_window - 1
+    assert not cog._in_conversation(follow_up())                      # window has passed
+    cog._convos[(50, 5)] = _t.monotonic()
+    cog.convo_window = 0
+    assert not cog._in_conversation(follow_up())                      # feature off
+
+
+def test_follow_up_ignores_messages_aimed_at_other_people():
+    import time as _t
+    cog = make_brain(FakeDB(), FakeLLM(""))
+    cog._convos[(50, 5)] = _t.monotonic()
+    sam = types.SimpleNamespace(id=7, bot=False)
+    assert not cog._in_conversation(follow_up("@Sam are you coming tonight?", mentions=[sam]))
+    assert not cog._in_conversation(follow_up(reply_to=FakeDiscordMessage(author_id=7)))   # reply to Sam
+    assert cog._in_conversation(follow_up(reply_to=FakeDiscordMessage(author_id=999)))     # reply to the bot (id 999)
+
+
+class _Typing:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+async def _replying_starts_the_window_and_chiming_in_does_too():
+    cog = make_brain(FakeDB(), FakeLLM("Because it is a good bike."))
+    m = chat_msg("@FunBot why did I buy that motorbike")
+    m.channel.typing = lambda: _Typing()
+    assert not cog._in_conversation(follow_up())
+    await cog._respond(m)
+    assert m.sent == ["Because it is a good bike."]
+    assert cog._in_conversation(follow_up())                          # now their next message counts
+
+    cog2 = make_brain(FakeDB(), FakeLLM("A bold choice."))
+    m2 = chat_msg("I finally bought that motorbike")
+    await cog2._chime_in(m2)
+    assert cog2._in_conversation(follow_up())                         # they can answer a chime-in without an @
+
+
+def test_replying_starts_the_window_and_chiming_in_does_too():
+    asyncio.run(_replying_starts_the_window_and_chiming_in_does_too())
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
