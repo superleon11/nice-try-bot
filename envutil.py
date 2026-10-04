@@ -17,3 +17,10 @@ def env_float(name: str, default: float) -> float:
 
 def env_int(name: str, default: int) -> int:
     return int(env_float(name, default))
+
+
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")

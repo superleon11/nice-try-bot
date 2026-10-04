@@ -71,6 +71,14 @@ Say something like **"generate me an image of a cat in a wizard hat"** (also "ma
 
 **Cost cap.** The real cost is worked out from the token usage OpenAI reports and counts toward the same totals as the chat spend (`!llmusage`). OpenAI doesn't publish a fixed worst-case price per image, so before each image the bot reserves `IMAGE_MAX_COST_USD` (default $0.25) and refuses if that wouldn't fit under: `IMAGE_DAILY_BUDGET_USD` (images only, default $1.00), `LLM_DAILY_BUDGET_USD` and `LLM_MONTHLY_BUDGET_USD`. **The default overall daily cap of $0.50 only leaves room for a couple of images a day, so raise `LLM_DAILY_BUDGET_USD` (say to 2) if you want more.** Check the first few images on your OpenAI usage page to confirm the real cost, and lower `IMAGE_MAX_COST_USD` if it's well under 25 cents.
 
+## Emoji reactions
+
+The bot randomly reacts to messages with emoji, like someone clicking the reaction button: by default about 8% of messages (`REACT_CHANCE=0.08`, `0` switches it off), with at least 20 seconds between reactions in a channel (`REACT_COOLDOWN_SECONDS`). It usually adds one emoji and sometimes two. It ignores bots, commands and messages that @ the bot (it replies to those instead).
+
+**Which emoji.** If the AI is on, it asks a cheap model (`LLM_REACTION_MODEL`, default Claude Haiku 4.5, a fraction of a cent per reaction, counted toward the spending caps) for emoji that fit the message. Otherwise, or if the AI fails or the cap is hit, it picks randomly from a built-in list, mixing in your server's own custom emoji (`REACT_USE_SERVER_EMOJIS=false` to stop that). Use `REACT_EMOJIS` to replace the built-in list with your own (comma or space separated; custom emoji as `<:name:id>`), and `REACT_AI=false` to never use the AI for this. `REACT_CHANNEL_IDS` limits it to certain channels.
+
+The bot needs the **Add Reactions** permission (plus Read Message History). If it's missing, the deploy logs say so once.
+
 ## Soundboard visits
 
 Once a voice call has had at least 2 people in it for 15 minutes, the bot waits a random 15-45 minutes, joins, plays one random soundboard clip, and leaves. If the call is still going it comes back again after another random 15-45 minutes. If the call drops below 2 people, the timers reset. It picks from your server's own soundboard, or Discord's default sounds if the server has none.
@@ -78,7 +86,7 @@ Once a voice call has had at least 2 people in it for 15 minutes, the bot waits 
 Everything is adjustable with optional Railway variables (see `.env.example`): `SOUND_VISITS_ENABLED`, `SOUND_MIN_CALL_MINUTES`, `SOUND_MIN_DELAY_MINUTES`, `SOUND_MAX_DELAY_MINUTES`, `SOUND_MIN_HUMANS`.
 
 The bot needs the **Connect**, **Speak** and **Use Soundboard** permissions in the voice channel. Easiest: Server Settings → Roles → the bot's role → enable those three. Or re-invite with this link (replace `YOUR_APP_ID`):
-`https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=4398049741824`
+`https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=4398049774656`
 
 Joining voice needs the `discord.py[voice]` extra (already in `requirements.txt`; it installs PyNaCl and davey). Test it with `!soundtest` while you're in a voice channel.
 
@@ -86,7 +94,7 @@ Joining voice needs the `discord.py[voice]` extra (already in `requirements.txt`
 
 1. https://discord.com/developers/applications → New Application → **Bot** tab → copy the token.
 2. On the same tab enable **Message Content Intent** (the bot will not start without it).
-3. **OAuth2 → URL Generator**: scope `bot`; permissions: View Channels, Send Messages, Read Message History, Embed Links, Connect, Speak, Use Soundboard. Open the URL to invite the bot.
+3. **OAuth2 → URL Generator**: scope `bot`; permissions: View Channels, Send Messages, Read Message History, Embed Links, Attach Files, Add Reactions, Connect, Speak, Use Soundboard. Open the URL to invite the bot.
 4. In Discord, enable Developer Mode (Settings → Advanced), right-click the throwback channel → Copy Channel ID.
 
 ## 2. Run locally (optional)
@@ -117,4 +125,4 @@ python main.py
 - Voice sessions are timed in memory; they're saved when someone leaves voice or the bot shuts down cleanly. A hard crash loses sessions that were open at that moment.
 - The database holds per-user counters (message count and voice time), the notes about people, and AI spend. Message text is never stored.
 - `!mystats` and `!leaderboard` only count activity from when the bot was added. They do not include old history.
-- Tests: run each file in `tests/` with `python tests/<file>.py` (helpers, archive, soundboard_logic, llm, brain_logic, images, throwback_ai, throwback_cog, schedule).
+- Tests: run each file in `tests/` with `python tests/<file>.py` (helpers, archive, soundboard_logic, llm, brain_logic, images, throwback_ai, throwback_cog, schedule, reactions).

@@ -254,6 +254,43 @@ def parse_judge_reply(raw: str, n: int):
     return pick - 1, truncate(comment, 250) if comment else "", truncate(image_prompt, 800)
 
 
+# ---- emoji reactions ----------------------------------------------------------------------------
+
+DEFAULT_REACTIONS = ["😂", "💀", "😭", "🔥", "👀", "🤔", "😬", "🙃", "🫡", "👏", "💯", "😎", "🥲", "🍿", "🫠", "🤨", "😳", "👍"]
+
+REACTION_RULES = (
+    "Pick 1 to 3 emoji that someone might react with to this chat message: matching its mood or "
+    "content, and funny or ironic is welcome. Reply with ONLY the emoji, separated by spaces, "
+    "no words."
+)
+
+
+def parse_emoji_reply(raw: str, max_n: int = 3) -> list[str]:
+    """Pull plain emoji out of a model reply. Anything containing letters or digits is dropped."""
+    out = []
+    for token in (raw or "").split():
+        if len(token) > 12 or any(ch.isascii() and ch.isalnum() for ch in token):
+            continue
+        if token not in out:
+            out.append(token)
+    return out[:max_n]
+
+
+def choose_random_emojis(unicode_pool: list, custom_pool: list, rng: random.Random = random,
+                         custom_chance: float = 0.4, two_chance: float = 0.2) -> list:
+    """One emoji (sometimes two), from the server's custom emoji some of the time if it has any."""
+    pools = [p for p in (unicode_pool, custom_pool) if p]
+    if not pools:
+        return []
+    picks = []
+    for _ in range(2 if rng.random() < two_chance else 1):
+        pool = custom_pool if (custom_pool and (not unicode_pool or rng.random() < custom_chance)) else unicode_pool
+        choice = rng.choice(pool)
+        if choice not in picks:
+            picks.append(choice)
+    return picks
+
+
 # ---- memory (notes about people) ---------------------------------------------------------------
 
 MEMORY_SYSTEM = (
