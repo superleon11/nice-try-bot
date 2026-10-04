@@ -12,14 +12,26 @@ Only three dependencies: `discord.py`, `asyncpg`, `python-dotenv`. Tables are cr
 | `!leaderboard [messages\|voice\|combined]` (`!lb`) | anyone | top 10 (combined = messages + voice minutes) |
 | `!backfill` | administrators | import the server's existing message history (run once) |
 | `!throwback` | Manage Server | post a throwback right now |
+| `!soundtest` | Manage Server | join your current voice channel now, play a soundboard clip, leave |
 
 Mentioning the bot always gets a reply. Keyword replies are limited to one per channel every 5 minutes, and fire about half the time.
+
+## Soundboard visits
+
+Once a voice call has had at least 2 people in it for 15 minutes, the bot waits a random 15-45 minutes, joins, plays one random soundboard clip, and leaves. If the call is still going it comes back again after another random 15-45 minutes. If the call drops below 2 people, the timers reset. It picks from your server's own soundboard, or Discord's default sounds if the server has none.
+
+Everything is adjustable with optional Railway variables (see `.env.example`): `SOUND_VISITS_ENABLED`, `SOUND_MIN_CALL_MINUTES`, `SOUND_MIN_DELAY_MINUTES`, `SOUND_MAX_DELAY_MINUTES`, `SOUND_MIN_HUMANS`.
+
+The bot needs the **Connect**, **Speak** and **Use Soundboard** permissions in the voice channel. Easiest: Server Settings → Roles → the bot's role → enable those three. Or re-invite with this link (replace `YOUR_APP_ID`):
+`https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=4398049741824`
+
+Joining voice needs the `discord.py[voice]` extra (already in `requirements.txt`; it installs PyNaCl and davey). Test it with `!soundtest` while you're in a voice channel.
 
 ## 1. Discord setup
 
 1. https://discord.com/developers/applications → New Application → **Bot** tab → copy the token.
 2. On the same tab enable **Message Content Intent** (the bot will not start without it).
-3. **OAuth2 → URL Generator**: scope `bot`; permissions: View Channels, Send Messages, Read Message History, Embed Links. Open the URL to invite the bot.
+3. **OAuth2 → URL Generator**: scope `bot`; permissions: View Channels, Send Messages, Read Message History, Embed Links, Connect, Speak, Use Soundboard. Open the URL to invite the bot.
 4. In Discord, enable Developer Mode (Settings → Advanced), right-click the throwback channel → Copy Channel ID.
 
 ## 2. Run locally (optional)
@@ -49,4 +61,4 @@ python main.py
 
 - Voice sessions are timed in memory; they're saved when someone leaves voice or the bot shuts down cleanly. A hard crash loses sessions that were open at that moment.
 - Message text is stored in your database so the throwback can pull from it. Command messages (starting with the prefix) and bot messages are not stored.
-- Tests for the pure helpers: `python tests/test_helpers.py`.
+- Tests: `python tests/test_helpers.py` and `python tests/test_soundboard_logic.py`.
