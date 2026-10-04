@@ -12,63 +12,63 @@ REPLY_GROUPS = [
     (
         {"thanks", "thx", "thank", "ty"},
         [
-            "Oh wow, gratitude. In *this* economy?",
-            "You're welcome. I accept payment in memes.",
-            "Aww, no problem!",
+            "You're most welcome. Och, it was nae bother.",
+            "Gratitude noted. I accept payment in biscuits.",
+            "Not at all, it was a pleasure.",
         ],
     ),
     (
         {"lol", "lmao", "haha", "rofl"},
         [
-            "I laughed. Internally. In binary.",
-            "This is the way.",
-            "Sheesh.",
+            "I found that thoroughly amusing. Internally, in binary.",
+            "Aye, that's a good one.",
+            "A fine piece of comedy, I must say.",
         ],
     ),
     (
         {"gm", "morning"},
         [
-            "Good morning! Hydrate or diedrate.",
-            "Rise and grind. Or rise and scroll, I won't judge.",
+            "Good morning to you. A braw day for it.",
+            "Good morning. I trust you slept well, or at least adequately.",
         ],
     ),
     (
         {"gn", "goodnight", "night"},
         [
-            "Sleep well! The messages will still be here.",
-            "Night night. Don't let the bugs bite.",
+            "Goodnight. Sleep well, the messages will keep till the morn.",
+            "Away to your bed, then. Sleep soundly.",
         ],
     ),
     (
         {"win", "won", "nice", "congrats", "awesome", "great"},
         [
-            "That's really great, keep being awesome!",
-            "Absolute legend behaviour.",
-            "No cap, that's impressive.",
+            "Well done indeed. That's a cracking result.",
+            "Splendid work. Absolutely braw.",
+            "Congratulations. Thoroughly deserved.",
         ],
     ),
     (
         {"bored", "boring"},
         [
-            "Bored? Have you tried touching grass?",
-            "Boredom is just creativity in a trench coat.",
+            "Bored, you say? Might I suggest a wee walk in some fresh air.",
+            "Boredom is merely creativity in a trench coat.",
         ],
     ),
     (
         {"fail", "broken", "bug", "crashed", "crash"},
         [
             "Have you tried turning it off and on again?",
-            "Works on my machine. 🤷",
-            "F in the chat.",
+            "Och, that's a shame. It works on my machine, for what it's worth.",
+            "My condolences to the afflicted system.",
         ],
     ),
 ]
 
 MENTION_REPLIES = [
     "You rang?",
-    "I'm here, I'm here. What did I miss?",
-    "Yes? I was busy being a bot.",
-    "Present!",
+    "Aye, I'm here. What can I do for you?",
+    "At your service. What's the matter?",
+    "Present and correct.",
 ]
 
 _WORD_RE = re.compile(r"[a-z0-9']+")

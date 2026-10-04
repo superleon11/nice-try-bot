@@ -101,8 +101,8 @@ class ImageGen(commands.Cog):
             return
         except LLMError as exc:
             log.warning("Image generation failed: %s", exc)
-            await self._reply(message, "I couldn't make that one. The image service said no or had a problem. "
-                                       "Try rewording it.")
+            await self._reply(message, "I couldn't make that one. The image service said: "
+                                       f"`{truncate(str(exc), 300)}`")
             return
         except Exception:
             log.exception("Unexpected error while generating an image")
