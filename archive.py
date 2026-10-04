@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 
 import discord
 
-from helpers import Reservoir, TopN, clean_candidate, random_window, score_message
+from helpers import Reservoir, TopN, clean_candidate, random_window, score_message, windows_overlap
 
 log = logging.getLogger(__name__)
 
 TOP_N = 40          # most-reacted candidates kept in memory per scanned window
 RANDOM_N = 100      # plus a random sample of the rest, so funny-but-unreacted messages get a chance
 PICK_FROM = 10      # without the AI, the final pick is random among the best this many
+MIN_LENGTH = 0.5    # a window is between 50% and 100% of the configured length, picked at random
+FRESH_DRAWS = 25    # tries to draw a window that doesn't overlap one already used
 
 
 @dataclass
@@ -64,29 +66,55 @@ async def scan_window(guild, channels, start: datetime, end: datetime, prefix: s
     return pool, eligible, scanned
 
 
+def _fresh_window(earliest, now, window_days, avoid, rng):
+    """A random window that doesn't overlap any in `avoid` (best effort: after FRESH_DRAWS, any)."""
+    window = random_window(earliest, now, window_days, rng, MIN_LENGTH)
+    for _ in range(FRESH_DRAWS):
+        if not any(windows_overlap(window, w) for w in avoid):
+            break
+        window = random_window(earliest, now, window_days, rng, MIN_LENGTH)
+    return window
+
+
 async def find_pool(guild, channels, prefix: str = "!", window_days: int = 30, *,
-                    max_attempts: int = 6, min_eligible: int = 15,
+                    max_attempts: int = 40, min_eligible: int = 10,
+                    recent: list | None = None,
                     rng: random.Random = random) -> list[Candidate]:
-    """Pick random windows until one has enough material; return that window's candidate pool."""
+    """Keep drawing random windows until one has at least `min_eligible` usable messages; return
+    that window's candidate pool.
+
+    Each window has a random length (50-100% of window_days) and a random position anywhere in the
+    channel's history, and never overlaps a window already tried in this search or one in `recent`
+    (a list the caller keeps between days; the window used is appended to it). Empty or quiet
+    windows are simply redrawn. After max_attempts, the best window seen (if it had any usable
+    message at all) is used.
+    """
     if not channels:
         return []
     earliest = min(c.created_at for c in channels)  # nothing can exist before the channel did
     now = datetime.now(timezone.utc)
-    chosen: tuple[int, list[Candidate]] | None = None
+    avoid = list(recent or [])
+    chosen: tuple[int, list[Candidate], tuple] | None = None
     for attempt in range(1, max_attempts + 1):
-        start, end = random_window(earliest, now, window_days, rng)
+        window = _fresh_window(earliest, now, window_days, avoid, rng)
+        avoid.append(window)
+        start, end = window
         candidates, eligible, scanned = await scan_window(guild, channels, start, end, prefix, rng)
         log.info("Throwback attempt %d: %s to %s, scanned %d messages, %d eligible",
                  attempt, start.date(), end.date(), scanned, eligible)
-        if chosen is None or eligible > chosen[0]:
-            chosen = (eligible, candidates)
+        if eligible and (chosen is None or eligible > chosen[0]):
+            chosen = (eligible, candidates, window)
         if eligible >= min_eligible:
             break
-    return chosen[1] if chosen else []
+    if chosen is None:
+        return []
+    if recent is not None:
+        recent.append(chosen[2])
+    return chosen[1]
 
 
 async def find_throwback(guild, channels, prefix: str = "!", window_days: int = 30, *,
-                         max_attempts: int = 6, min_eligible: int = 15,
+                         max_attempts: int = 40, min_eligible: int = 10,
                          rng: random.Random = random) -> Candidate | None:
     """Without the AI: pick one of the best (most-reacted) messages of a random window."""
     pool = await find_pool(guild, channels, prefix, window_days, max_attempts=max_attempts,

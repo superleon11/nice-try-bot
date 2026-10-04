@@ -133,13 +133,19 @@ def score_message(reactions: int, length: int, rng: random.Random = random) -> f
 
 
 def random_window(earliest: datetime, latest: datetime, days: int = 30,
-                  rng: random.Random = random) -> tuple[datetime, datetime]:
-    """A random span of `days` days that lies between earliest and latest."""
-    span = timedelta(days=days)
+                  rng: random.Random = random, min_fraction: float = 1.0) -> tuple[datetime, datetime]:
+    """A random span between earliest and latest. Its length is `days`, or, if min_fraction < 1,
+    a random length between min_fraction * days and days. Its position is uniform over the range."""
+    length = days * (min_fraction + (1.0 - min_fraction) * rng.random())
+    span = timedelta(days=length)
     if latest - earliest <= span:
         return earliest, latest
     start = earliest + (latest - span - earliest) * rng.random()
     return start, start + span
+
+
+def windows_overlap(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
 
 
 class TopN:

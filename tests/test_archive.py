@@ -173,8 +173,8 @@ async def _search_starts_from_the_channels_creation():
     # server is 3000 days old but the channel only 40 days old: windows must never start before it
     ch = FakeChannel([msg("a message that is definitely long enough", 10, reactions=2)], created_days_ago=40)
     guild = FakeGuild([ch], created_days_ago=3000)
-    found = await archive.find_throwback(guild, [ch], "!", 30, max_attempts=3, min_eligible=1, rng=random.Random(9))
-    assert found is not None  # would almost never succeed in 3 tries if it searched all 3000 days
+    found = await archive.find_throwback(guild, [ch], "!", 30, max_attempts=15, min_eligible=1, rng=random.Random(9))
+    assert found is not None  # would almost never succeed in 15 tries if it searched all 3000 days
 
 
 def test_only_reads_the_channels_it_is_given():
@@ -187,6 +187,79 @@ def test_no_channels_means_no_result():
 
 def test_search_starts_from_the_channels_creation():
     asyncio.run(_search_starts_from_the_channels_creation())
+
+
+# ---- 60-day windows, redrawing, variable length, no repeats -------------------------------------
+async def _redraws_until_a_window_has_messages():
+    # One busy fortnight about 1000 days ago in a 3000-day-old channel: nearly every window is empty,
+    # yet with enough attempts it keeps drawing until it lands on the messages.
+    busy = [msg(f"a busy message number {i} from long ago", 1000 + i * 0.5) for i in range(20)]
+    ch = FakeChannel(busy)
+    guild = FakeGuild([ch])
+    pool = await archive.find_pool(guild, [ch], "!", 60, max_attempts=500, min_eligible=5, rng=random.Random(4))
+    assert len(pool) >= 5
+    assert ch.history_calls > 3      # it had to try several windows
+
+
+async def _uses_the_best_window_when_none_reaches_the_minimum():
+    few = [msg(f"one of only three messages, number {i}", 20 + i) for i in range(3)]
+    ch = FakeChannel(few, created_days_ago=200)
+    pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, max_attempts=60, min_eligible=50,
+                                   rng=random.Random(6))
+    assert 1 <= len(pool) <= 3       # not enough for the minimum, but better than nothing
+
+
+async def _nothing_at_all_gives_an_empty_pool():
+    ch = FakeChannel([], created_days_ago=200)
+    assert await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, max_attempts=10) == []
+
+
+async def _recent_windows_are_avoided_and_the_used_one_is_recorded():
+    msgs = [msg(f"a message that fits anywhere, number {i}", d) for i, d in enumerate(range(5, 400, 3))]
+    ch = FakeChannel(msgs, created_days_ago=400)
+    recent = []
+    for seed in range(5):
+        before = len(recent)
+        pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, min_eligible=1, recent=recent,
+                                       rng=random.Random(seed))
+        assert pool and len(recent) == before + 1     # the window that was used gets recorded
+
+
+def test_fresh_windows_avoid_blocked_history():
+    from helpers import windows_overlap
+    now = NOW
+    earliest = now - timedelta(days=3000)
+    blocked = [(earliest, earliest + timedelta(days=2500))]   # only the most recent 500 days are free
+    clear = 0
+    for seed in range(200):
+        w = archive._fresh_window(earliest, now, 60, blocked, random.Random(seed))
+        assert earliest <= w[0] < w[1] <= now
+        assert 30 - 1e-6 <= (w[1] - w[0]).total_seconds() / 86400 <= 60 + 1e-6
+        clear += not windows_overlap(w, blocked[0])
+    assert clear >= 190, clear      # ~17% of draws are free, 25 draws per window: nearly always finds one
+
+
+def test_fresh_windows_still_work_when_everything_is_blocked():
+    now = NOW
+    earliest = now - timedelta(days=100)
+    w = archive._fresh_window(earliest, now, 60, [(earliest, now)], random.Random(1))
+    assert earliest <= w[0] < w[1] <= now          # best effort: gives up avoiding rather than failing
+
+
+def test_redraws_until_a_window_has_messages():
+    asyncio.run(_redraws_until_a_window_has_messages())
+
+
+def test_uses_the_best_window_when_none_reaches_the_minimum():
+    asyncio.run(_uses_the_best_window_when_none_reaches_the_minimum())
+
+
+def test_nothing_at_all_gives_an_empty_pool():
+    asyncio.run(_nothing_at_all_gives_an_empty_pool())
+
+
+def test_recent_windows_are_avoided_and_the_used_one_is_recorded():
+    asyncio.run(_recent_windows_are_avoided_and_the_used_one_is_recorded())
 
 
 if __name__ == "__main__":

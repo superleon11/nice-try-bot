@@ -124,6 +124,28 @@ def test_format_memory_prompt_lists_notes_and_messages():
     assert "(none)" in format_memory_prompt([{"user_id": 1, "name": "X", "notes": [], "messages": []}])
 
 
+def test_random_window_length_varies_between_half_and_full():
+    from datetime import datetime, timedelta, timezone
+    earliest = datetime(2016, 10, 17, tzinfo=timezone.utc)
+    latest = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    lengths = []
+    for seed in range(300):
+        start, end = random_window(earliest, latest, 60, random.Random(seed), min_fraction=0.5)
+        assert earliest <= start < end <= latest
+        lengths.append((end - start).total_seconds() / 86400)
+    assert 30 - 1e-6 <= min(lengths) < 35 and 55 < max(lengths) <= 60 + 1e-6
+    assert len({round(x) for x in lengths}) > 15     # lots of different lengths
+
+
+def test_windows_overlap():
+    from datetime import datetime, timezone
+    from helpers import windows_overlap
+    d = lambda n: datetime(2020, 1, n, tzinfo=timezone.utc)  # noqa: E731
+    assert windows_overlap((d(1), d(10)), (d(5), d(15)))
+    assert not windows_overlap((d(1), d(10)), (d(10), d(20)))
+    assert not windows_overlap((d(1), d(5)), (d(8), d(9)))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

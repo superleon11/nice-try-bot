@@ -1,6 +1,6 @@
 """Throwback of the Day.
 
-Once a day the bot reads a random 30-day slice of ONE channel's history straight from Discord and
+Once a day the bot reads a random slice (up to 60 days) of ONE channel's history straight from Discord and
 forgets it again afterwards. If the AI is on, it reads a pool of candidate messages (the most
 reacted plus a random sample), picks the funniest or most interesting one, adds a one-line comment
 in its own voice, and illustrates it with a generated image. Without the AI (or if it fails or the
@@ -42,7 +42,11 @@ class Throwback(commands.Cog):
         # it is also the one channel the bot reads history from.
         self.channel_id = _env_int("THROWBACK_CHANNEL_ID", 0)
         self.source_id = _env_int("THROWBACK_SOURCE_CHANNEL_ID", 0) or self.channel_id
-        self.window_days = max(1, _env_int("THROWBACK_WINDOW_DAYS", 30))
+        self.window_days = max(1, _env_int("THROWBACK_WINDOW_DAYS", 60))
+        # Keep drawing windows until one has at least this many usable messages (up to max_attempts).
+        self.min_messages = max(1, _env_int("THROWBACK_MIN_MESSAGES", 10))
+        self.max_attempts = max(1, _env_int("THROWBACK_MAX_ATTEMPTS", 40))
+        self._recent: list = []   # windows used on earlier days (this run), so they aren't repeated
         # The daily post happens at a random moment between these hours, in this time zone.
         self.start_hour = _env_int("THROWBACK_START_HOUR", 10) % 24
         self.end_hour = _env_int("THROWBACK_END_HOUR", 15) % 24
@@ -125,7 +129,10 @@ class Throwback(commands.Cog):
             return f"I don't have View Channel + Read Message History permission in #{source.name}."
 
         async with self._lock:
-            pool = await find_pool(source.guild, [source], self.bot.command_prefix, self.window_days)
+            pool = await find_pool(source.guild, [source], self.bot.command_prefix, self.window_days,
+                                   max_attempts=self.max_attempts, min_eligible=self.min_messages,
+                                   recent=self._recent)
+            del self._recent[:-30]   # only remember the last 30
         if not pool:
             return "I couldn't find anything good to post this time."
 
@@ -185,14 +192,14 @@ class Throwback(commands.Cog):
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
     async def throwback(self, ctx: commands.Context) -> None:
-        """Dig up a throwback right now (can take a minute or two). It posts in the throwback channel."""
+        """Dig up a throwback right now (can take a few minutes). It posts in the throwback channel."""
         if not self.channel_id:
             await ctx.send("THROWBACK_CHANNEL_ID isn't set, so I don't know which channel to use.")
             return
         if self._lock.locked():
             await ctx.send("I'm already digging through the archives, give me a moment.")
             return
-        await ctx.send("📼 Digging through the archives… this can take a minute or two.")
+        await ctx.send("📼 Digging through the archives… this can take a few minutes.")
         problem = await self.post_throwback()
         if problem:
             await ctx.send(problem)
