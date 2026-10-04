@@ -197,9 +197,15 @@ class Database:
                 model, purpose, input_tokens, output_tokens, cost_usd,
             )
 
-    async def llm_spend_since(self, since) -> float:
+    async def llm_spend_since(self, since, purpose: str | None = None) -> float:
         async with self.pool.acquire() as conn:
-            total = await conn.fetchval(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE created_at >= $1", since
-            )
+            if purpose is None:
+                total = await conn.fetchval(
+                    "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE created_at >= $1", since
+                )
+            else:
+                total = await conn.fetchval(
+                    "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE created_at >= $1 AND purpose = $2",
+                    since, purpose,
+                )
         return float(total)

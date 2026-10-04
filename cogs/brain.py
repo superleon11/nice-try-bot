@@ -105,6 +105,9 @@ class Brain(commands.Cog):
             return
         if message.content.startswith(self.bot.command_prefix):
             return
+        image_claims = getattr(self.bot, "image_claims", None)
+        if image_claims and image_claims(message):
+            return   # an "generate me an image" request: the image cog handles it
         addressed = self.is_for_me(message)
         if addressed or self.learn_all:
             self._remember(message)

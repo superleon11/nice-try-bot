@@ -242,3 +242,25 @@ def parse_memory_update(text: str, valid: dict[int, set[int]]) -> dict[int, tupl
                 removes.append(rid)
         result[user_id] = (adds, removes)
     return result
+
+
+# ---- image requests ---------------------------------------------------------
+
+_IMAGE_REQUEST = re.compile(
+    r"^\s*(?:(?:hey|yo|ok|okay|please|pls|can you|could you|can u|would you)[,\s]+)*"
+    r"(?:generate|make|create|draw|imagine|render|paint)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+|some\s+)?"
+    r"(?:image|picture|pic|photo|drawing|illustration)s?\b"
+    r"[\s,:\-]*(?:of|showing|with|where|that|depicting)?\b\s*(?P<what>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_image_request(text: str):
+    """None if this isn't a request for an image, otherwise the description ('' if they gave none).
+
+    Only matches at the START of the message, e.g. "generate me an image of a cat in a hat".
+    """
+    m = _IMAGE_REQUEST.match(text or "")
+    if not m:
+        return None
+    return " ".join(m.group("what").split()).strip(" ?!.,:;-")

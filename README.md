@@ -13,6 +13,7 @@ Only three dependencies: `discord.py`, `asyncpg`, `python-dotenv`. Tables are cr
 | `!throwback` | Manage Server | dig up a throwback right now (takes a minute or two on a big server) |
 | `!soundtest` | Manage Server | join your current voice channel now, play a soundboard clip, leave |
 | `!note add @user text` | Manage Server | add a note about someone (also `!note list @user`, `!note edit <id> text`, `!note remove <id>`) |
+| `!imagine <description>` | anyone | make an image (or just say "generate me an image of ...", see below) |
 | `!learnnow` | Manage Server | turn what the bot has seen so far into notes right now (normally daily) |
 | `!llmusage` | Manage Server | show AI spending against the caps |
 
@@ -55,6 +56,14 @@ DELETE FROM user_notes WHERE id = 12;
 **Chiming in unprompted.** The bot also occasionally replies to messages that don't mention it. By default about 5% of messages (`LLM_RANDOM_REPLY_CHANCE=0.05`), with at least 5 minutes between chime-ins in a channel (`LLM_RANDOM_COOLDOWN_SECONDS=300`), in every channel it can see. To limit it to certain channels, set `LLM_RANDOM_CHANNEL_IDS` to a comma-separated list of channel IDs. The AI may decide it has nothing good to say and stay silent. Set the chance to `0` to switch this off. Over the cost cap, it falls back to the old canned keyword replies (so those only run when unprompted replies are off or the cap is hit). Each chime-in counts toward the spending cap like any other call.
 
 The bot's personality is `LLM_PERSONA` (a default is built in). The AI's replies can never ping `@everyone` or roles.
+
+## Image generation
+
+Say something like **"generate me an image of a cat in a wizard hat"** (also "make / create / draw a picture of ...", with or without @ing the bot, as long as the message *starts* that way) or use `!imagine a cat in a wizard hat`, and the bot replies with the picture. Needs `OPENAI_API_KEY` (an OpenAI API key; API billing is separate from a ChatGPT subscription). Without it, nothing image-related runs. OpenAI says you may need to complete **Organization Verification** in the OpenAI developer console before GPT image models work for your account; if every request fails with an HTTP 403, that's why.
+
+**Model.** `gpt-image-2.5-flare` by default (`IMAGE_MODEL` to change it, for example to `gpt-image-2.5-sunburst`). OpenAI bills it per token: $5 / 1M text input tokens and $30 / 1M image output tokens, so a medium 1024x1024 picture should cost a few cents. Quality (`IMAGE_QUALITY`: low, medium, high, xhigh, max, auto; default medium) and size (`IMAGE_SIZE`, default 1024x1024) are the main cost levers. OpenAI's content moderation still applies; if it refuses a prompt, the bot says it couldn't make that one.
+
+**Cost cap.** The real cost is worked out from the token usage OpenAI reports and counts toward the same totals as the chat spend (`!llmusage`). OpenAI doesn't publish a fixed worst-case price per image, so before each image the bot reserves `IMAGE_MAX_COST_USD` (default $0.25) and refuses if that wouldn't fit under: `IMAGE_DAILY_BUDGET_USD` (images only, default $1.00), `LLM_DAILY_BUDGET_USD` and `LLM_MONTHLY_BUDGET_USD`. **The default overall daily cap of $0.50 only leaves room for a couple of images a day, so raise `LLM_DAILY_BUDGET_USD` (say to 2) if you want more.** Check the first few images on your OpenAI usage page to confirm the real cost, and lower `IMAGE_MAX_COST_USD` if it's well under 25 cents.
 
 ## Soundboard visits
 
@@ -102,4 +111,4 @@ python main.py
 - Voice sessions are timed in memory; they're saved when someone leaves voice or the bot shuts down cleanly. A hard crash loses sessions that were open at that moment.
 - The database holds per-user counters (message count and voice time), the notes about people, and AI spend. Message text is never stored.
 - `!mystats` and `!leaderboard` only count activity from when the bot was added. They do not include old history.
-- Tests: run each file in `tests/` with `python tests/<file>.py` (helpers, archive, soundboard_logic, llm, brain_logic).
+- Tests: run each file in `tests/` with `python tests/<file>.py` (helpers, archive, soundboard_logic, llm, brain_logic, images).

@@ -28,6 +28,10 @@ class Fun(commands.Cog):
         if message.content.startswith(self.bot.command_prefix):
             return
 
+        image_claims = getattr(self.bot, "image_claims", None)
+        if image_claims and image_claims(message):
+            return   # the image cog handles "generate me an image ..."
+
         # When the AI brain is on, it answers anything addressed to the bot.
         if getattr(self.bot, "brain_active", False):
             claims = getattr(self.bot, "brain_claims", None)
