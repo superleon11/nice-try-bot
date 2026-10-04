@@ -7,6 +7,7 @@ import time
 import discord
 from discord.ext import commands
 
+from addressing import is_addressed
 from helpers import pick_mention_reply, pick_reply
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,11 @@ class Fun(commands.Cog):
         if message.content.startswith(self.bot.command_prefix):
             return
 
-        # Always answer a direct mention.
+        # When the AI brain is on, it answers anything addressed to the bot.
+        if getattr(self.bot, "brain_active", False) and is_addressed(message, self.bot.user):
+            return
+
+        # Otherwise always answer a direct mention with a canned line.
         if self.bot.user in message.mentions:
             await self._reply(message, pick_mention_reply())
             return

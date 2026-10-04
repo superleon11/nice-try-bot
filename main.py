@@ -15,7 +15,8 @@ load_dotenv()
 log = logging.getLogger("funbot")
 
 PREFIX = os.getenv("BOT_PREFIX", "!")
-EXTENSIONS = ("cogs.activity", "cogs.fun", "cogs.stats", "cogs.throwback", "cogs.soundboard")
+EXTENSIONS = ("cogs.activity", "cogs.fun", "cogs.stats", "cogs.throwback", "cogs.soundboard",
+              "cogs.notes", "cogs.brain")
 
 
 class FunBot(commands.Bot):

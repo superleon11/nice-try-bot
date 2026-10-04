@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 from helpers import (  # noqa: E402
     REPLY_GROUPS, TopN, clean_candidate, format_duration, pick_mention_reply, pick_reply,
     random_window, score_message, truncate,
+    format_memory_prompt, parse_memory_update,
 )
 
 
@@ -96,6 +97,31 @@ def test_topn_keeps_best_and_never_compares_items():
         top.push(score, {"id": i})  # dicts are not orderable: would raise if compared
     assert [item["id"] for item in top.best()] in ([2, 3, 5], [3, 2, 5])
     assert len(top) == 3
+
+
+def test_parse_memory_update_happy_path_and_code_fences():
+    reply = 'Sure! ```json\n{"users": [{"user_id": "10", "add": ["Loves bikes", "  Hates   mornings "], "remove": [4, 5]}]}\n```'
+    out = parse_memory_update(reply, {10: {4}})
+    assert out == {10: (["Loves bikes", "Hates mornings"], [4])}   # 5 is not an auto note of user 10
+
+
+def test_parse_memory_update_ignores_bad_input():
+    assert parse_memory_update("no json here", {1: set()}) == {}
+    assert parse_memory_update("{not valid json}", {1: set()}) == {}
+    assert parse_memory_update('{"users": "oops"}', {1: set()}) == {}
+    assert parse_memory_update('{"users": [{"user_id": "99", "add": ["x note"]}]}', {1: set()}) == {}
+    import json
+    payload = {"users": [{"user_id": 1, "add": ["ok", "x" * 300, 7, "fine note", "FINE note"], "remove": ["a", 3.0]}]}
+    out = parse_memory_update(json.dumps(payload), {1: {3}})
+    assert out == {1: (["fine note"], [3])}
+
+
+def test_format_memory_prompt_lists_notes_and_messages():
+    text = format_memory_prompt([{"user_id": 10, "name": "Dave", "notes": [(4, "auto", "Loves bikes"), (7, "manual", "Is Dave")],
+                                  "messages": ["hello there", "bikes are great"]}])
+    assert "user_id=10 name=Dave" in text and "[4 auto] Loves bikes" in text and "[7 manual] Is Dave" in text
+    assert "- bikes are great" in text
+    assert "(none)" in format_memory_prompt([{"user_id": 1, "name": "X", "notes": [], "messages": []}])
 
 
 if __name__ == "__main__":

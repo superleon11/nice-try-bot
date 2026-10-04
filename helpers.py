@@ -2,6 +2,7 @@
 
 import heapq
 import itertools
+import json
 import random
 import re
 from datetime import datetime, timedelta
@@ -162,3 +163,82 @@ class TopN:
 
     def __len__(self) -> int:
         return len(self._heap)
+
+
+# ---- memory (notes about people) ---------------------------------------------------------------
+
+MEMORY_SYSTEM = (
+    "You keep short notes about members of a small friend-group Discord server, to help a "
+    "funny bot make good inside jokes about them. You are given each person's existing notes "
+    "(with ids and a source) and some of their recent messages. For each person decide what "
+    "to add or remove.\n"
+    "- Add short notes (max about 15 words each): lasting facts, habits, opinions, nicknames, "
+    "running jokes, memorable things they said. Only add what the messages clearly support, and "
+    "never repeat an existing note.\n"
+    "- Remove a note only if its source is 'auto' and it is a duplicate or clearly outdated. "
+    "Never remove a 'manual' note.\n"
+    "- Adding nothing is fine.\n"
+    'Reply with ONLY JSON: {"users": [{"user_id": "<id>", "add": ["note", ...], "remove": [<note id>, ...]}]}'
+)
+
+
+def format_memory_prompt(people: list[dict]) -> str:
+    """people: [{"user_id", "name", "notes": [(id, source, text)], "messages": [str]}]"""
+    parts = []
+    for p in people:
+        lines = [f"### user_id={p['user_id']} name={p['name']}"]
+        lines.append("Existing notes:" + ("" if p["notes"] else " (none)"))
+        for note_id, source, text in p["notes"]:
+            lines.append(f"  [{note_id} {source}] {text}")
+        lines.append("Recent messages:")
+        lines.extend(f"  - {m}" for m in p["messages"])
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
+def parse_memory_update(text: str, valid: dict[int, set[int]]) -> dict[int, tuple[list[str], list[int]]]:
+    """Parse the model's JSON reply into {user_id: (notes_to_add, note_ids_to_remove)}.
+
+    `valid` maps each user we asked about to the ids of their AI-written notes. Anything about other
+    users, and removals of ids that are not AI-written notes of that user, is ignored. Garbage in
+    gives an empty result rather than an error.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return {}
+    try:
+        data = json.loads(text[start:end + 1])
+    except ValueError:
+        return {}
+    entries = data.get("users") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    result: dict[int, tuple[list[str], list[int]]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            user_id = int(entry.get("user_id"))
+        except (TypeError, ValueError):
+            continue
+        if user_id not in valid:
+            continue
+        adds: list[str] = []
+        raw_adds = entry.get("add")
+        for note in raw_adds if isinstance(raw_adds, list) else []:
+            if not isinstance(note, str):
+                continue
+            note = " ".join(note.split())
+            if 3 <= len(note) <= 200 and note.lower() not in {a.lower() for a in adds}:
+                adds.append(note)
+        removes: list[int] = []
+        raw_removes = entry.get("remove")
+        for rid in raw_removes if isinstance(raw_removes, list) else []:
+            try:
+                rid = int(rid)
+            except (TypeError, ValueError):
+                continue
+            if rid in valid[user_id] and rid not in removes:
+                removes.append(rid)
+        result[user_id] = (adds, removes)
+    return result
