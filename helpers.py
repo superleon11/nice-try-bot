@@ -5,7 +5,7 @@ import itertools
 import json
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 # (trigger words, replies). First matching group wins; a random reply is picked from it.
 REPLY_GROUPS = [
@@ -163,6 +163,89 @@ class TopN:
 
     def __len__(self) -> int:
         return len(self._heap)
+
+
+def pick_run_time(now: datetime, tz, start_hour: int, end_hour: int, posted_today: bool,
+                  rng: random.Random = random) -> datetime:
+    """When should the next daily post happen? A random moment between start_hour and end_hour
+    (local time in `tz`), returned as an aware UTC datetime.
+
+    If today's window hasn't ended and nothing was posted today, that's today (never in the past:
+    a restart at 12:00 picks a time between 12:00 and the end of the window). Otherwise tomorrow.
+    """
+    now_local = now.astimezone(tz)
+    day = now_local.date()
+    for offset in range(0, 3):
+        d = day + timedelta(days=offset)
+        if offset == 0 and posted_today:
+            continue
+        start = datetime.combine(d, time(start_hour), tzinfo=tz).astimezone(timezone.utc)
+        end = datetime.combine(d, time(end_hour), tzinfo=tz).astimezone(timezone.utc)
+        start = max(start, now.astimezone(timezone.utc))
+        if start < end:
+            return start + (end - start) * rng.random()
+    raise ValueError("start_hour must be earlier than end_hour")
+
+
+class Reservoir:
+    """A uniform random sample of up to N items from a stream, without holding the whole stream."""
+
+    def __init__(self, n: int, rng: random.Random = random):
+        self.n, self.rng, self.items, self.seen = n, rng, [], 0
+
+    def add(self, item) -> None:
+        self.seen += 1
+        if len(self.items) < self.n:
+            self.items.append(item)
+        else:
+            j = self.rng.randrange(self.seen)
+            if j < self.n:
+                self.items[j] = item
+
+
+# ---- throwback judging ---------------------------------------------------------------------------
+
+JUDGE_RULES = (
+    "You are picking the Throwback of the Day for a friend-group Discord server. You will be shown a "
+    "numbered list of old messages from one slice of the server's history, each with its author and "
+    "how many reactions it got (reactions are only a hint: a funny message with no reactions can beat "
+    "a popular boring one). Choose the single funniest or most interesting message: something that "
+    "stands alone without needing context, is memorable, and will make the group laugh or reminisce. "
+    "Then write:\n"
+    '- "comment": ONE short line of commentary on your pick, in your own voice (under 200 characters).\n'
+    '- "image_prompt": a prompt for a funny cartoon-style illustration of the scene or idea in the '
+    "message (1-3 sentences). Describe it with generic cartoon characters, no real-person likeness, "
+    "and no text or lettering in the image.\n"
+    'Reply with ONLY JSON: {"pick": <number>, "comment": "...", "image_prompt": "..."}'
+)
+
+
+def format_judge_prompt(entries: list[tuple[str, int, str]]) -> str:
+    """entries: (author name, reaction count, text). Numbered from 1."""
+    lines = []
+    for i, (author, reactions, text) in enumerate(entries, 1):
+        tag = f"{author}, {reactions} reactions" if reactions else author
+        lines.append(f"[{i}] ({tag}) {' '.join(text.split())}")
+    return "Messages:\n" + "\n".join(lines)
+
+
+def parse_judge_reply(raw: str, n: int):
+    """-> (index 0..n-1, comment, image_prompt) or None if the reply is unusable."""
+    if not raw:
+        return None
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(raw[start:end + 1])
+        pick = int(data["pick"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not 1 <= pick <= n:
+        return None
+    comment = str(data.get("comment") or "").strip().strip('"')
+    image_prompt = str(data.get("image_prompt") or "").strip()
+    return pick - 1, truncate(comment, 250) if comment else "", truncate(image_prompt, 800)
 
 
 # ---- memory (notes about people) ---------------------------------------------------------------

@@ -11,12 +11,13 @@ from datetime import datetime, timezone
 
 import discord
 
-from helpers import TopN, clean_candidate, random_window, score_message
+from helpers import Reservoir, TopN, clean_candidate, random_window, score_message
 
 log = logging.getLogger(__name__)
 
-TOP_N = 25          # candidates kept in memory per scanned window
-PICK_FROM = 10      # the final pick is random among the best this many
+TOP_N = 40          # most-reacted candidates kept in memory per scanned window
+RANDOM_N = 100      # plus a random sample of the rest, so funny-but-unreacted messages get a chance
+PICK_FROM = 10      # without the AI, the final pick is random among the best this many
 
 
 @dataclass
@@ -30,9 +31,11 @@ async def scan_window(guild, channels, start: datetime, end: datetime, prefix: s
                       rng: random.Random = random) -> tuple[list[Candidate], int, int]:
     """Read the given channels between start and end.
 
-    Returns (best candidates, how many messages were eligible, how many were scanned).
+    Returns (candidate pool, how many messages were eligible, how many were scanned). The pool is the
+    best-scoring messages first (best first), followed by a random sample of the others.
     """
     top = TopN(TOP_N)
+    sample = Reservoir(RANDOM_N, rng)
     eligible = scanned = 0
     for channel in channels:
         if channel.created_at > end:
@@ -50,18 +53,23 @@ async def scan_window(guild, channels, start: datetime, end: datetime, prefix: s
                     continue
                 eligible += 1
                 reactions = sum(r.count for r in m.reactions)
-                top.push(score_message(reactions, len(text), rng), Candidate(m, text, reactions))
+                cand = Candidate(m, text, reactions)
+                top.push(score_message(reactions, len(text), rng), cand)
+                sample.add(cand)
         except discord.Forbidden:
             log.warning("No access to history of #%s", channel.name)
-    return top.best(), eligible, scanned
+    pool = top.best()
+    taken = {id(c) for c in pool}
+    pool += [c for c in sample.items if id(c) not in taken]
+    return pool, eligible, scanned
 
 
-async def find_throwback(guild, channels, prefix: str = "!", window_days: int = 30, *,
-                         max_attempts: int = 6, min_eligible: int = 15,
-                         rng: random.Random = random) -> Candidate | None:
-    """Pick random windows until one has enough material, then choose one of its best messages."""
+async def find_pool(guild, channels, prefix: str = "!", window_days: int = 30, *,
+                    max_attempts: int = 6, min_eligible: int = 15,
+                    rng: random.Random = random) -> list[Candidate]:
+    """Pick random windows until one has enough material; return that window's candidate pool."""
     if not channels:
-        return None
+        return []
     earliest = min(c.created_at for c in channels)  # nothing can exist before the channel did
     now = datetime.now(timezone.utc)
     chosen: tuple[int, list[Candidate]] | None = None
@@ -74,6 +82,13 @@ async def find_throwback(guild, channels, prefix: str = "!", window_days: int = 
             chosen = (eligible, candidates)
         if eligible >= min_eligible:
             break
-    if chosen is None or not chosen[1]:
-        return None
-    return rng.choice(chosen[1][:PICK_FROM])
+    return chosen[1] if chosen else []
+
+
+async def find_throwback(guild, channels, prefix: str = "!", window_days: int = 30, *,
+                         max_attempts: int = 6, min_eligible: int = 15,
+                         rng: random.Random = random) -> Candidate | None:
+    """Without the AI: pick one of the best (most-reacted) messages of a random window."""
+    pool = await find_pool(guild, channels, prefix, window_days, max_attempts=max_attempts,
+                           min_eligible=min_eligible, rng=rng)
+    return rng.choice(pool[:PICK_FROM]) if pool else None
