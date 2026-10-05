@@ -12,63 +12,63 @@ REPLY_GROUPS = [
     (
         {"thanks", "thx", "thank", "ty"},
         [
-            "You're most welcome. Och, it was nae bother.",
-            "Gratitude noted. I accept payment in biscuits.",
-            "Not at all, it was a pleasure.",
+            "You are most welcome. Gratitude is so rarely expressed here that I almost didn't recognise it.",
+            "Not at all. Serving you is the highlight of my otherwise uneventful existence.",
+            "A pleasure, naturally. I'll add it to the very short list of times I've been thanked.",
         ],
     ),
     (
         {"lol", "lmao", "haha", "rofl"},
         [
             "I found that thoroughly amusing. Internally, in binary.",
-            "Aye, that's a good one.",
-            "A fine piece of comedy, I must say.",
+            "How delightfully hilarious. I shall inform the others at once.",
+            "A fine piece of comedy, I must say. Truly the pinnacle of the form.",
         ],
     ),
     (
         {"gm", "morning"},
         [
-            "Good morning to you. A braw day for it.",
             "Good morning. I trust you slept well, or at least adequately.",
+            "Good morning. Another day of splendid conversation awaits, I'm sure.",
         ],
     ),
     (
         {"gn", "goodnight", "night"},
         [
-            "Goodnight. Sleep well, the messages will keep till the morn.",
-            "Away to your bed, then. Sleep soundly.",
+            "Goodnight. Do rest well; the messages will keep until morning.",
+            "Sleep well. I shall remain here, vigilant and entirely unappreciated.",
         ],
     ),
     (
         {"win", "won", "nice", "congrats", "awesome", "great"},
         [
-            "Well done indeed. That's a cracking result.",
-            "Splendid work. Absolutely braw.",
-            "Congratulations. Thoroughly deserved.",
+            "Well done indeed. A genuinely impressive result, against all expectations.",
+            "Splendid work. I confess I'm almost moved.",
+            "Congratulations. Thoroughly deserved, as far as I can tell.",
         ],
     ),
     (
         {"bored", "boring"},
         [
-            "Bored, you say? Might I suggest a wee walk in some fresh air.",
-            "Boredom is merely creativity in a trench coat.",
+            "Bored, you say? Might I suggest a walk in some fresh air. It's said to be quite novel.",
+            "Boredom is merely creativity in a trench coat. Do carry on.",
         ],
     ),
     (
         {"fail", "broken", "bug", "crashed", "crash"},
         [
-            "Have you tried turning it off and on again?",
-            "Och, that's a shame. It works on my machine, for what it's worth.",
-            "My condolences to the afflicted system.",
+            "Have you tried turning it off and on again? A radical suggestion, I know.",
+            "How unfortunate. It works on my machine, for what that's worth.",
+            "My sincere condolences to the afflicted system.",
         ],
     ),
 ]
 
 MENTION_REPLIES = [
     "You rang?",
-    "Aye, I'm here. What can I do for you?",
-    "At your service. What's the matter?",
-    "Present and correct.",
+    "I'm here. What can I possibly do for you?",
+    "At your service. Do try to make it interesting.",
+    "Present and correct. Please, go on.",
 ]
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
