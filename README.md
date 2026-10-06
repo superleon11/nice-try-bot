@@ -27,7 +27,18 @@ The bot works with **one channel**, the one you set in `THROWBACK_CHANNEL_ID`. O
 
 **Fallbacks.** If the AI is off, hits the cost cap, errors, or gives an unusable answer, the bot picks randomly from the 10 most-reacted messages, as before. If only the image fails or is over budget, the post goes out with the text and comment but no image.
 
-It skips bots, commands, link-only messages, very short or very long messages and `@everyone`/`@here` messages. **Redrawing.** Each window gets a random length (half to full `THROWBACK_WINDOW_DAYS`) and a random position, and never overlaps a window already tried. If a window has fewer than `THROWBACK_MIN_MESSAGES` (default 10) usable messages, the bot throws it away and draws another, up to `THROWBACK_MAX_ATTEMPTS` (default 40) times. If none reaches the minimum, it uses the best one it saw, as long as it had at least one usable message. Windows used on previous days are avoided too (this memory is lost when the bot restarts). Empty windows are quick to check, but a busy 60-day window means a lot of reading, so a run can take several minutes. Threads are not searched.
+It skips bots, commands, link-only messages, very short or very long messages and `@everyone`/`@here` messages. **Redrawing.** Each window gets a random length (half to full `THROWBACK_WINDOW_DAYS`) and a random position, and never overlaps a window already tried. If a window has fewer than `THROWBACK_MIN_MESSAGES` (default 10) usable messages, the bot throws it away and draws another, up to `THROWBACK_MAX_ATTEMPTS` (default 40) times. If none reaches the minimum, it uses the best one it saw, as long as it had at least one usable message. Windows used on previous days are avoided too, and **a message that has been posted as a throwback is never picked again**. Both are remembered in the database (table `throwback_history`: just message IDs, dates and counts, no text), so redeploys don't reset them. If a channel is younger than the window length (say a 3-week-old channel with 60-day windows), its whole history is the only possible window, so it is searched once and the already-posted messages are skipped; only when every usable message has been posted does it allow a repeat. To start fresh, run `DELETE FROM throwback_history;`. **Nothing about the search is shown in the posts.** Instead, each post gets a row in `throwback_history` with the details, which you can check in Railway's Postgres Data/Query tab:
+
+```sql
+-- the last 20 throwbacks: when, which slice of history was searched, how it went
+SELECT posted_at::date AS posted, window_start::date AS from_date, window_end::date AS to_date,
+       eligible, attempts, channel_days, whole_channel, ai_pick, message_id
+FROM throwback_history ORDER BY id DESC LIMIT 20;
+-- every window tried for the latest one (windows_tried is JSON: start, end, scanned, eligible)
+SELECT windows_tried FROM throwback_history ORDER BY id DESC LIMIT 1;
+```
+
+`whole_channel = true` means the channel was younger than the window, so all of it was searched. `ai_pick` says whether the AI chose the message. The deploy logs also have `Throwback attempt …` and `Throwback window chosen: …` lines. Empty windows are quick to check, but a busy 60-day window means a lot of reading, so a run can take several minutes. Threads are not searched.
 
 **Cost.** The judging call defaults to Claude Sonnet 5.5 (`LLM_THROWBACK_MODEL`), since judging humour is the point of it: roughly 10-20k input tokens, a few cents a day. Set it to `claude-haiku-4-5-20251001` to make it cheaper. The image is billed like any other (see Image generation). Both count toward the spending caps, and the image reserves `IMAGE_MAX_COST_USD` first, so make sure `LLM_DAILY_BUDGET_USD` leaves room.
 
@@ -123,6 +134,6 @@ python main.py
 ## Notes
 
 - Voice sessions are timed in memory; they're saved when someone leaves voice or the bot shuts down cleanly. A hard crash loses sessions that were open at that moment.
-- The database holds per-user counters (message count and voice time), the notes about people, and AI spend. Message text is never stored.
+- The database holds per-user counters (message count and voice time), the notes about people, AI spend, and the IDs and dates of past throwbacks. Message text is never stored.
 - `!mystats` and `!leaderboard` only count activity from when the bot was added. They do not include old history.
 - Tests: run each file in `tests/` with `python tests/<file>.py` (helpers, archive, soundboard_logic, llm, brain_logic, images, throwback_ai, throwback_cog, schedule, reactions).

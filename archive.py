@@ -22,6 +22,17 @@ MIN_LENGTH = 0.5    # a window is between 50% and 100% of the configured length,
 FRESH_DRAWS = 25    # tries to draw a window that doesn't overlap one already used
 
 
+class PoolResult(list):
+    """The candidate pool (a plain list), plus facts about the search that produced it."""
+
+    window = None          # (start, end) of the slice of history that was searched
+    eligible = 0           # usable messages found in that slice
+    attempts = 0           # windows drawn before settling on this one
+    whole_channel = False  # True if the channel is younger than the window, so all of it was searched
+    channel_days = 0       # age of the channel in days
+    tried = ()             # every window drawn: dicts with start, end, scanned, eligible
+
+
 @dataclass
 class Candidate:
     message: "discord.Message"
@@ -30,11 +41,12 @@ class Candidate:
 
 
 async def scan_window(guild, channels, start: datetime, end: datetime, prefix: str = "!",
-                      rng: random.Random = random) -> tuple[list[Candidate], int, int]:
+                      rng: random.Random = random, exclude: set | None = None) -> tuple[list[Candidate], int, int]:
     """Read the given channels between start and end.
 
     Returns (candidate pool, how many messages were eligible, how many were scanned). The pool is the
-    best-scoring messages first (best first), followed by a random sample of the others.
+    best-scoring messages first (best first), followed by a random sample of the others. Messages
+    whose id is in `exclude` (earlier throwbacks) are skipped.
     """
     top = TopN(TOP_N)
     sample = Reservoir(RANDOM_N, rng)
@@ -47,11 +59,13 @@ async def scan_window(guild, channels, start: datetime, end: datetime, prefix: s
             continue
         try:
             async for m in channel.history(limit=None, after=start, before=end, oldest_first=True):
+                if m.created_at >= end:
+                    break   # belt and braces: never read past the end of the window
                 scanned += 1
                 if m.author.bot or m.type not in (discord.MessageType.default, discord.MessageType.reply):
                     continue
                 text = clean_candidate(m.content, prefix)
-                if text is None:
+                if text is None or (exclude and getattr(m, "id", None) in exclude):
                     continue
                 eligible += 1
                 reactions = sum(r.count for r in m.reactions)
@@ -78,8 +92,8 @@ def _fresh_window(earliest, now, window_days, avoid, rng):
 
 async def find_pool(guild, channels, prefix: str = "!", window_days: int = 30, *,
                     max_attempts: int = 40, min_eligible: int = 10,
-                    recent: list | None = None,
-                    rng: random.Random = random) -> list[Candidate]:
+                    recent: list | None = None, exclude: set | None = None,
+                    rng: random.Random = random) -> PoolResult:
     """Keep drawing random windows until one has at least `min_eligible` usable messages; return
     that window's candidate pool.
 
@@ -87,30 +101,46 @@ async def find_pool(guild, channels, prefix: str = "!", window_days: int = 30, *
     channel's history, and never overlaps a window already tried in this search or one in `recent`
     (a list the caller keeps between days; the window used is appended to it). Empty or quiet
     windows are simply redrawn. After max_attempts, the best window seen (if it had any usable
-    message at all) is used.
+    message at all) is used. Messages in `exclude` (earlier throwbacks) never count. If the channel
+    is younger than the window length, the whole channel is the only possible window, so it is
+    searched once rather than over and over.
     """
     if not channels:
-        return []
+        return PoolResult()
     earliest = min(c.created_at for c in channels)  # nothing can exist before the channel did
     now = datetime.now(timezone.utc)
     avoid = list(recent or [])
-    chosen: tuple[int, list[Candidate], tuple] | None = None
+    chosen: tuple[int, list[Candidate], tuple, int] | None = None
+    tried: list[dict] = []
     for attempt in range(1, max_attempts + 1):
         window = _fresh_window(earliest, now, window_days, avoid, rng)
         avoid.append(window)
         start, end = window
-        candidates, eligible, scanned = await scan_window(guild, channels, start, end, prefix, rng)
+        candidates, eligible, scanned = await scan_window(guild, channels, start, end, prefix, rng, exclude)
         log.info("Throwback attempt %d: %s to %s, scanned %d messages, %d eligible",
                  attempt, start.date(), end.date(), scanned, eligible)
+        tried.append({"start": start.date().isoformat(), "end": end.date().isoformat(),
+                      "scanned": scanned, "eligible": eligible})
         if eligible and (chosen is None or eligible > chosen[0]):
-            chosen = (eligible, candidates, window)
+            chosen = (eligible, candidates, window, attempt)
         if eligible >= min_eligible:
             break
+        if window == (earliest, now):
+            log.info("The channel is younger than the window length: its whole history is the only window")
+            break
     if chosen is None:
-        return []
+        return PoolResult()
     if recent is not None:
         recent.append(chosen[2])
-    return chosen[1]
+    result = PoolResult(chosen[1])
+    result.eligible, result.window, result.attempts = chosen[0], chosen[2], chosen[3]
+    result.whole_channel = chosen[2] == (earliest, now)
+    result.channel_days = (now - earliest).days
+    result.tried = tried
+    log.info("Throwback window chosen: %s to %s (%d usable messages) after %d attempt(s); channel is %d days old%s",
+             chosen[2][0].date(), chosen[2][1].date(), chosen[0], chosen[3], result.channel_days,
+             ", so the whole channel is searched" if result.whole_channel else "")
+    return result
 
 
 async def find_throwback(guild, channels, prefix: str = "!", window_days: int = 30, *,

@@ -9,6 +9,7 @@ cost cap is hit) it picks one of the most-reacted messages instead.
 
 import asyncio
 import io
+import json
 import logging
 import os
 import random
@@ -46,7 +47,6 @@ class Throwback(commands.Cog):
         # Keep drawing windows until one has at least this many usable messages (up to max_attempts).
         self.min_messages = max(1, _env_int("THROWBACK_MIN_MESSAGES", 10))
         self.max_attempts = max(1, _env_int("THROWBACK_MAX_ATTEMPTS", 40))
-        self._recent: list = []   # windows used on earlier days (this run), so they aren't repeated
         # The daily post happens at a random moment between these hours, in this time zone.
         self.start_hour = _env_int("THROWBACK_START_HOUR", 10) % 24
         self.end_hour = _env_int("THROWBACK_END_HOUR", 15) % 24
@@ -129,10 +129,17 @@ class Throwback(commands.Cog):
             return f"I don't have View Channel + Read Message History permission in #{source.name}."
 
         async with self._lock:
+            db = self.bot.db
+            recent = await db.recent_throwback_windows(30)    # slices already used on earlier days
+            used = await db.posted_throwback_ids()             # messages already posted as throwbacks
+            kwargs = dict(max_attempts=self.max_attempts, min_eligible=self.min_messages)
             pool = await find_pool(source.guild, [source], self.bot.command_prefix, self.window_days,
-                                   max_attempts=self.max_attempts, min_eligible=self.min_messages,
-                                   recent=self._recent)
-            del self._recent[:-30]   # only remember the last 30
+                                   recent=recent, exclude=used, **kwargs)
+            if not pool and used:
+                log.info("Every usable message has been posted before: allowing repeats this time")
+                pool = await find_pool(source.guild, [source], self.bot.command_prefix, self.window_days,
+                                       recent=recent, **kwargs)
+            window = pool.window if (pool and pool.window) else (None, None)
         if not pool:
             return "I couldn't find anything good to post this time."
 
@@ -184,6 +191,14 @@ class Throwback(commands.Cog):
             await target.send(embed=embed, file=file)
         else:
             await target.send(embed=embed)
+        try:
+            await self.bot.db.add_throwback(
+                m.id, window[0], window[1], eligible=getattr(pool, "eligible", None),
+                attempts=getattr(pool, "attempts", None), channel_days=getattr(pool, "channel_days", None),
+                whole_channel=getattr(pool, "whole_channel", None), ai_pick=bool(comment),
+                windows_tried=json.dumps(list(getattr(pool, "tried", ()))))
+        except Exception:
+            log.exception("Could not record the throwback in the database")
         return None
 
     # ---- command --------------------------------------------------------

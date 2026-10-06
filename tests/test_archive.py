@@ -35,8 +35,12 @@ NOW = datetime.now(timezone.utc)
 
 
 # ---- fakes ----------------------------------------------------------------------------------
+_ids = iter(range(1, 10**9))
+
+
 def msg(text, days_ago, reactions=0, bot=False, mtype=MessageType.default):
     return types.SimpleNamespace(
+        id=next(_ids),
         author=types.SimpleNamespace(bot=bot),
         type=mtype,
         content=text,
@@ -260,6 +264,82 @@ def test_nothing_at_all_gives_an_empty_pool():
 
 def test_recent_windows_are_avoided_and_the_used_one_is_recorded():
     asyncio.run(_recent_windows_are_avoided_and_the_used_one_is_recorded())
+
+
+
+async def _excluded_messages_are_never_candidates():
+    msgs = [msg(f"message number {i} that is long enough", 5 + i * 0.1) for i in range(20)]
+    ch = FakeChannel(msgs, created_days_ago=30)
+    banned = {m.id for m in msgs[:15]}
+    pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, min_eligible=1, exclude=banned, rng=random.Random(2))
+    assert pool and all(c.message.id not in banned for c in pool)
+    assert len(pool) == 5
+    everything = {m.id for m in msgs}
+    assert await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, min_eligible=1, exclude=everything,
+                                   max_attempts=5, rng=random.Random(2)) == []
+
+
+async def _a_young_channel_is_searched_once_not_forty_times():
+    # channel is 20 days old but windows are 30-60 days: the only possible window is the whole channel
+    msgs = [msg(f"message number {i} that is long enough", 2 + i * 0.1) for i in range(5)]
+    ch = FakeChannel(msgs, created_days_ago=20)
+    pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, min_eligible=50, max_attempts=40,
+                                   rng=random.Random(3))
+    assert len(pool) == 5 and ch.history_calls == 1
+
+
+def test_excluded_messages_are_never_candidates():
+    asyncio.run(_excluded_messages_are_never_candidates())
+
+
+def test_a_young_channel_is_searched_once_not_forty_times():
+    asyncio.run(_a_young_channel_is_searched_once_not_forty_times())
+
+
+
+async def _result_reports_the_window_and_search_facts():
+    msgs = [msg(f"a long enough message number {i}", 200 + i) for i in range(12)]
+    ch = FakeChannel(msgs, created_days_ago=3000)
+    pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, max_attempts=3000, min_eligible=5, rng=random.Random(8))
+    start, end = pool.window
+    assert 30 - 1e-6 <= (end - start).total_seconds() / 86400 <= 60 + 1e-6
+    assert pool.eligible >= 5 and pool.attempts >= 1 and not pool.whole_channel and pool.channel_days >= 2999
+    assert all(start < c.message.created_at < end for c in pool)     # candidates really come from that window
+    assert len(pool.tried) == pool.attempts or len(pool.tried) > pool.attempts   # every window drawn is recorded
+    assert all({"start", "end", "scanned", "eligible"} <= set(w) for w in pool.tried)
+    assert pool.tried[pool.attempts - 1]["eligible"] == pool.eligible
+
+
+async def _young_channel_result_is_flagged_as_whole_channel():
+    ch = FakeChannel([msg("a long enough message in a young channel", 3)], created_days_ago=20)
+    pool = await archive.find_pool(FakeGuild([ch]), [ch], "!", 60, min_eligible=1, rng=random.Random(1))
+    assert pool.whole_channel and pool.channel_days in (19, 20)
+
+
+async def _scan_never_reads_past_the_end_of_the_window():
+    class Greedy(FakeChannel):
+        async def history(self, limit=None, after=None, before=None, oldest_first=False):
+            for m in sorted(self.messages, key=lambda m: m.created_at):   # ignores `before`, like a buggy source
+                if m.created_at > after:
+                    yield m
+    inside = msg("a message that is inside the window ok", 40)
+    outside = msg("a message that is after the window ends", 10)
+    ch = Greedy([inside, outside])
+    pool, eligible, scanned = await archive.scan_window(FakeGuild([ch]), [ch], NOW - timedelta(days=50),
+                                                        NOW - timedelta(days=20))
+    assert eligible == 1 and [c.text for c in pool] == [inside.content]
+
+
+def test_result_reports_the_window_and_search_facts():
+    asyncio.run(_result_reports_the_window_and_search_facts())
+
+
+def test_young_channel_result_is_flagged_as_whole_channel():
+    asyncio.run(_young_channel_result_is_flagged_as_whole_channel())
+
+
+def test_scan_never_reads_past_the_end_of_the_window():
+    asyncio.run(_scan_never_reads_past_the_end_of_the_window())
 
 
 if __name__ == "__main__":

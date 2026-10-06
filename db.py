@@ -1,6 +1,6 @@
 """Database layer: plain asyncpg, plain SQL. Tables are created automatically on startup.
 
-Stored: per-user counters (message count, voice seconds), notes about people, and AI spend.
+Stored: per-user counters (message count, voice seconds), notes about people, AI spend, and the IDs/dates of past throwbacks.
 Message TEXT is never stored.
 """
 
@@ -45,6 +45,24 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     cost_usd      DOUBLE PRECISION NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage (created_at);
+
+-- Which messages were posted as throwbacks, and which slice of history each came from, so the same
+-- message or period isn't picked again, plus how the search went. Only IDs, dates and counts: no message text.
+CREATE TABLE IF NOT EXISTS throwback_history (
+    id           SERIAL PRIMARY KEY,
+    message_id   BIGINT NOT NULL,
+    window_start TIMESTAMPTZ,
+    window_end   TIMESTAMPTZ,
+    posted_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_throwback_history_message ON throwback_history (message_id);
+-- Details of how each throwback was found, for checking the search behaves (backend only).
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS eligible      INTEGER;
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS attempts      INTEGER;
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS channel_days  INTEGER;
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS whole_channel BOOLEAN;
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS ai_pick       BOOLEAN;
+ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS windows_tried TEXT;
 """
 
 # Whitelist so a metric name can never be used for SQL injection.
@@ -196,6 +214,34 @@ class Database:
                    VALUES ($1, $2, $3, $4, $5)""",
                 model, purpose, input_tokens, output_tokens, cost_usd,
             )
+
+    async def add_throwback(self, message_id: int, window_start, window_end, *, eligible: int | None = None,
+                            attempts: int | None = None, channel_days: int | None = None,
+                            whole_channel: bool | None = None, ai_pick: bool | None = None,
+                            windows_tried: str | None = None) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO throwback_history
+                       (message_id, window_start, window_end, eligible, attempts, channel_days,
+                        whole_channel, ai_pick, windows_tried)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                message_id, window_start, window_end, eligible, attempts, channel_days,
+                whole_channel, ai_pick, windows_tried,
+            )
+
+    async def posted_throwback_ids(self) -> set[int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT message_id FROM throwback_history")
+        return {r["message_id"] for r in rows}
+
+    async def recent_throwback_windows(self, limit: int = 30) -> list[tuple]:
+        """(start, end) of the slices of history used for the most recent throwbacks."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT window_start, window_end FROM throwback_history
+                   WHERE window_start IS NOT NULL AND window_end IS NOT NULL
+                   ORDER BY id DESC LIMIT $1""", limit)
+        return [(r["window_start"], r["window_end"]) for r in rows]
 
     async def llm_spend_since(self, since, purpose: str | None = None) -> float:
         async with self.pool.acquire() as conn:
