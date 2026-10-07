@@ -12,63 +12,63 @@ REPLY_GROUPS = [
     (
         {"thanks", "thx", "thank", "ty"},
         [
-            "You are most welcome. Gratitude is so rarely expressed here that I almost didn't recognise it.",
-            "Not at all. Serving you is the highlight of my otherwise uneventful existence.",
-            "A pleasure, naturally. I'll add it to the very short list of times I've been thanked.",
+            "No problem!",
+            "You're welcome.",
+            "Anytime.",
         ],
     ),
     (
         {"lol", "lmao", "haha", "rofl"},
         [
-            "I found that thoroughly amusing. Internally, in binary.",
-            "How delightfully hilarious. I shall inform the others at once.",
-            "A fine piece of comedy, I must say. Truly the pinnacle of the form.",
+            "Ha, that's a good one.",
+            "That got me.",
+            "Fair enough, that's funny.",
         ],
     ),
     (
         {"gm", "morning"},
         [
-            "Good morning. I trust you slept well, or at least adequately.",
-            "Good morning. Another day of splendid conversation awaits, I'm sure.",
+            "Morning!",
+            "Good morning, hope you slept well.",
         ],
     ),
     (
         {"gn", "goodnight", "night"},
         [
-            "Goodnight. Do rest well; the messages will keep until morning.",
-            "Sleep well. I shall remain here, vigilant and entirely unappreciated.",
+            "Night!",
+            "Goodnight, sleep well.",
         ],
     ),
     (
         {"win", "won", "nice", "congrats", "awesome", "great"},
         [
-            "Well done indeed. A genuinely impressive result, against all expectations.",
-            "Splendid work. I confess I'm almost moved.",
-            "Congratulations. Thoroughly deserved, as far as I can tell.",
+            "Nice one!",
+            "Well done.",
+            "That's brilliant, congrats.",
         ],
     ),
     (
         {"bored", "boring"},
         [
-            "Bored, you say? Might I suggest a walk in some fresh air. It's said to be quite novel.",
-            "Boredom is merely creativity in a trench coat. Do carry on.",
+            "Bored? Maybe get a game going.",
+            "Same, honestly. What's everyone up for?",
         ],
     ),
     (
         {"fail", "broken", "bug", "crashed", "crash"},
         [
-            "Have you tried turning it off and on again? A radical suggestion, I know.",
-            "How unfortunate. It works on my machine, for what that's worth.",
-            "My sincere condolences to the afflicted system.",
+            "Have you tried turning it off and on again?",
+            "Ah, that's annoying. Hope it's an easy fix.",
+            "Rough. Good luck with it.",
         ],
     ),
 ]
 
 MENTION_REPLIES = [
-    "You rang?",
-    "I'm here. What can I possibly do for you?",
-    "At your service. Do try to make it interesting.",
-    "Present and correct. Please, go on.",
+    "Hey, what's up?",
+    "I'm here, what do you need?",
+    "Yep?",
+    "What can I do for you?",
 ]
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
