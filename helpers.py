@@ -390,3 +390,69 @@ def parse_image_request(text: str):
     if not m:
         return None
     return " ".join(m.group("what").split()).strip(" ?!.,:;-")
+
+
+# ---- "find something @user said" requests ----------------------------------------------------------
+
+_RECALL_VERB = re.compile(
+    r"\b(find|search|look(?:\s+up|\s+for)?|dig(?:\s+up|\s+out)?|pull(?:\s+up)?|show|get|give|remind|"
+    r"recall|remember|what(?:'s|s|\s+is|\s+was|\s+were|\s+did)|which|who)\b", re.IGNORECASE)
+_RECALL_SAID = re.compile(r"\b(said|says|say|wrote|written|posted|sent|typed|messages?|quotes?|texted)\b",
+                          re.IGNORECASE)
+_YOU_SAID = re.compile(r"\byou(?:'ve|ve|\s+have)?\s+(?:ever\s+)?(?:said|say|wrote|sent|posted)\b", re.IGNORECASE)
+_SELF_WORDS = re.compile(r"\b(i|i've|ive|my|mine)\b", re.IGNORECASE)
+_ANYONE_WORDS = re.compile(r"\b(anyone|anybody|someone|somebody|everyone|everybody|ever|server|chat|"
+                           r"past|old|history|archive)\b", re.IGNORECASE)
+_TOPIC = re.compile(r"\b(?:about|regarding|mentioning|containing|involving|on the subject of)\s+(?P<t>[^?.!\n]+)",
+                    re.IGNORECASE)
+_TOPIC_STOP = {"the", "and", "that", "this", "with", "from", "have", "been", "they", "them", "their", "what",
+               "when", "where", "which", "were", "was", "for", "his", "her", "its", "has", "had", "you",
+               "your", "ever", "said", "said.", "like", "just", "some", "any"}
+
+
+def parse_recall_request(text: str, has_user_mentions: bool):
+    """Is this "find me a message @user said"? -> None, or (scope, topic_words).
+
+    scope is 'mentioned' (the @-ed people), 'self' (the person asking) or 'anyone'.
+    topic_words are lowercase words from an "about ..." phrase, to narrow the search.
+    """
+    text = text or ""
+    if not (_RECALL_VERB.search(text) and _RECALL_SAID.search(text)):
+        return None
+    if not has_user_mentions and _YOU_SAID.search(text):
+        return None   # asking about the bot itself, not searching history
+    if has_user_mentions:
+        scope = "mentioned"
+    elif _SELF_WORDS.search(text):
+        scope = "self"
+    elif _ANYONE_WORDS.search(text):
+        scope = "anyone"
+    else:
+        return None
+    topic = []
+    m = _TOPIC.search(text)
+    if m:
+        for w in re.findall(r"[a-z0-9']+", m.group("t").lower()):
+            if len(w) >= 3 and w not in _TOPIC_STOP and w not in topic:
+                topic.append(w)
+    return scope, topic[:6]
+
+
+RECALL_RULES = (
+    "Someone in a friend-group Discord server asked you to dig up a message from its history. You will "
+    "get their request and a numbered list of old messages (author, date, reactions). Choose the one "
+    "that best matches what they asked for (funniest, most embarrassing, most wholesome, about a topic, "
+    "and so on); when they just ask for a good one, pick the funniest or most memorable. Reactions are "
+    "only a hint. If nothing in the list fits at all, use 0. Write a short comment (under 150 characters) "
+    "in your own voice. Reply with ONLY JSON: "
+    '{"pick": <number or 0>, "comment": "..."}'
+)
+
+
+def format_recall_prompt(request: str, entries: list[tuple[str, str, int, str]]) -> str:
+    """entries: (author name, date text, reaction count, text). Numbered from 1."""
+    lines = []
+    for i, (author, when, reactions, text) in enumerate(entries, 1):
+        tag = f"{author}, {when}" + (f", {reactions} reactions" if reactions else "")
+        lines.append(f"[{i}] ({tag}) {' '.join(text.split())}")
+    return f"Their request: {' '.join(request.split())}\n\nMessages:\n" + "\n".join(lines)

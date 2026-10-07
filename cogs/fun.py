@@ -31,6 +31,9 @@ class Fun(commands.Cog):
         image_claims = getattr(self.bot, "image_claims", None)
         if image_claims and image_claims(message):
             return   # the image cog handles "generate me an image ..."
+        recall_claims = getattr(self.bot, "recall_claims", None)
+        if recall_claims and recall_claims(message):
+            return   # the recall cog handles "find me something @user said"
 
         # When the AI brain is on, it answers anything addressed to the bot.
         if getattr(self.bot, "brain_active", False):

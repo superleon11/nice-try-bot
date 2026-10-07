@@ -409,6 +409,22 @@ def test_replying_starts_the_window_and_chiming_in_does_too():
     asyncio.run(_replying_starts_the_window_and_chiming_in_does_too())
 
 
+def test_the_message_being_replied_to_reaches_the_model_and_its_author_notes_too():
+    db = FakeDB()
+    db.seed(G, 77, "Hates pineapple on pizza", "manual")
+    llm = FakeLLM("Fair point.")
+    cog = make_brain(db, llm)
+    target = types.SimpleNamespace(
+        id=300, content="pineapple is great", clean_content="pineapple is great", embeds=[], attachments=[],
+        author=types.SimpleNamespace(id=77, display_name="Sam", bot=False))
+    msg = chat_msg("@FunBot is this true?")
+    msg.reference = types.SimpleNamespace(resolved=target, message_id=300, channel_id=50)
+    asyncio.run(cog._chat(msg))
+    prompt = llm.calls[0]["prompt"]
+    assert "replying to" in prompt and "Sam: pineapple is great" in prompt
+    assert "Hates pineapple on pizza" in prompt and "is this true?" in prompt
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -20,6 +20,7 @@ import discord
 from discord.ext import commands, tasks
 
 from addressing import is_addressed
+from context import context_block
 from envutil import env_float, env_int
 from helpers import (
     MEMORY_SYSTEM, format_memory_prompt, parse_memory_update, pick_mention_reply, pick_reply, truncate,
@@ -33,8 +34,8 @@ DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # cheapest current model; see LLM_C
 DEFAULT_PERSONA = (
     "You are the Discord bot in a small server of long-time friends. Talk like a normal, friendly person "
     "in a group chat: plain everyday English, relaxed and natural. Do not put on a character, accent, "
-    "or act: no butler or formal speech, no slang or dialect, no catchphrases. "
-    "A bit of light, natural humour is fine when it fits, you have some sarcasm, but being clear and helpful comes first. "
+    "or act: no butler or formal speech, no forced sarcasm, no slang or dialect, no catchphrases. "
+    "A bit of light, natural humour is fine when it fits, but being clear and helpful comes first. "
     "Reply in 1-3 short sentences, answer what was actually said, and don't use hashtags or lots of emoji. "
     "You are given notes about the people involved: use them for inside jokes and callbacks, "
     "naturally and sparingly, and never recite them like a list or mention that you have notes. "
@@ -111,6 +112,9 @@ class Brain(commands.Cog):
         image_claims = getattr(self.bot, "image_claims", None)
         if image_claims and image_claims(message):
             return   # an "generate me an image" request: the image cog handles it
+        recall_claims = getattr(self.bot, "recall_claims", None)
+        if recall_claims and recall_claims(message):
+            return   # "find me something @user said": the recall cog handles it
         addressed = self.is_for_me(message)
         if addressed or self.learn_all:
             self._remember(message)
@@ -209,13 +213,20 @@ class Brain(commands.Cog):
     async def _chat(self, message: discord.Message, unprompted: bool = False) -> str:
         text = " ".join(message.clean_content.split()).replace(f"@{message.guild.me.display_name}", "").strip()
         parts = []
-        notes = await self._notes_block(message)
+        try:
+            pointed_at, others = await context_block(message, self.bot, self.bot.user.id)
+        except Exception:
+            log.exception("Could not read the message being replied to")
+            pointed_at, others = "", []
+        notes = await self._notes_block(message, [m.author for m in others])
         if notes:
             parts.append("What you know about the people involved (for jokes and callbacks; "
                          "never recite it like a list):\n" + notes)
         context = await self._recent_context(message)
         if context:
             parts.append("Recent chat (oldest first):\n" + context)
+        if pointed_at:
+            parts.append(pointed_at)
         if unprompted:
             parts.append(f"{message.author.display_name} just said this in the chat (nobody asked you anything): {text}\n\n"
                          "Chime in with one short, funny remark only if you have something genuinely good "
@@ -230,7 +241,7 @@ class Brain(commands.Cog):
             return "" if (not reply or reply.strip().upper().startswith("SKIP")) else truncate(reply, 1900)
         return truncate(reply, 1900) if reply else pick_mention_reply()
 
-    async def _notes_block(self, message: discord.Message) -> str:
+    async def _notes_block(self, message: discord.Message, extra_people=()) -> str:
         db, guild_id = self.bot.db, message.guild.id
         sections = []
         own = await db.get_notes(guild_id, message.author.id, 12)
@@ -238,8 +249,8 @@ class Brain(commands.Cog):
             sections.append(f"About {message.author.display_name} (the person talking to you):\n"
                             + "\n".join(f"- {r['note']}" for r in own))
         seen = {message.author.id}
-        for member in message.mentions:
-            if member.bot or member.id in seen or len(seen) > 3:
+        for member in [*message.mentions, *extra_people]:
+            if getattr(member, "bot", False) or member.id in seen or len(seen) > 3:
                 continue
             seen.add(member.id)
             rows = await db.get_notes(guild_id, member.id, 8)

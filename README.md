@@ -74,6 +74,25 @@ DELETE FROM user_notes WHERE id = 12;
 
 The bot's personality is `LLM_PERSONA` (a default is built in). The AI's replies can never ping `@everyone` or roles.
 
+## Replies and finding old messages
+
+**Replying to a message.** If you reply to someone's message (or paste a link to a message from this
+server) and tag the bot, it reads that message too, including link previews, forwards and the names of
+attachments, so "@bot is this true?" works on whatever you replied to. It can't see what is *inside*
+an image. It only follows links to channels you can also read.
+
+**Finding what someone said.** Ask in plain words, tagging the bot:
+
+- `@bot find me a funny message @Dave has said in the past`
+- `@bot what's the most embarrassing thing I've ever said`
+- `@bot dig up something @Sam said about pizza`
+
+The bot reads the server's history live (newest first, in channels both it and you can read), keeps the
+messages from the people you asked about, and has the AI pick the best match. It posts it with a jump
+link. Nothing is saved. It scans for up to `RECALL_SCAN_SECONDS` (default 40), so on a very big server
+it may not reach the oldest messages; when that happens the post says how far back it got. One search
+at a time, and each person has a short cooldown. Needs Read Message History (Administrator covers it).
+
 ## Image generation
 
 Say something like **"generate me an image of a cat in a wizard hat"** (also "make / create / draw a picture of ...", with or without @ing the bot, as long as the message *starts* that way) or use `!imagine a cat in a wizard hat`, and the bot replies with the picture. Needs `OPENAI_API_KEY` (an OpenAI API key; API billing is separate from a ChatGPT subscription). Without it, nothing image-related runs. OpenAI says you may need to complete **Organization Verification** in the OpenAI developer console before GPT image models work for your account; if every request fails with an HTTP 403, that's why.
