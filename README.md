@@ -10,7 +10,7 @@ Only three dependencies: `discord.py`, `asyncpg`, `python-dotenv`. Tables are cr
 |---|---|---|
 | `!mystats` | anyone | your messages, voice time and ranks |
 | `!leaderboard [messages\|voice\|combined]` (`!lb`) | anyone | top 10 (combined = messages + voice minutes) |
-| `!throwback` | Manage Server | dig up a throwback right now (takes a few minutes on a big server) |
+| `!throwback` | Manage Server | send a fresh set of 3 throwback candidates to the moderation channel now |
 | `!soundtest` | Manage Server | join your current voice channel now, play a soundboard clip, leave |
 | `!note add @user text` | Manage Server | add a note about someone (also `!note list @user`, `!note edit <id> text`, `!note remove <id>`) |
 | `!imagine <description>` | anyone | make an image (or just say "generate me an image of ...", see below) |
@@ -19,32 +19,35 @@ Only three dependencies: `discord.py`, `asyncpg`, `python-dotenv`. Tables are cr
 
 Mentioning the bot always gets a reply. Keyword replies are limited to one per channel every 5 minutes, and fire about half the time.
 
-## Throwback of the Day
+## Throwback of the Day (you approve it first)
 
-The bot works with **one channel**, the one you set in `THROWBACK_CHANNEL_ID`. Once a day, at a **random time between 10am and 3pm UK time** (a different time each day), it picks a random window of history (30 to 60 days long) anywhere between when that channel was created and now, reads that slice of the channel's history straight from Discord, chooses a message, posts it in the same channel, and forgets everything it read. **No message history is stored in the database.** NSFW channels work fine.
+Nothing is posted publicly until you have picked it. The daily flow:
 
-**With the AI on** (`ANTHROPIC_API_KEY` set), the bot collects a pool of up to about 140 candidate messages from the window (the 40 most-reacted plus a random sample of the rest, so funny messages nobody reacted to still get a chance) and sends them, with their authors, to the model in a single call. The model picks the funniest or most interesting one, writes a one-line comment in the bot's voice (shown as "The bot's verdict"), and writes a prompt for a cartoon-style illustration. If `OPENAI_API_KEY` is set too, the bot generates that image and attaches it to the post. Those ~140 messages are sent to Anthropic for this one call and are not kept anywhere else.
+1. **Around 10am UK time** the bot reads a random slice of history (30 to 60 days long) from the source channel and sends **3 candidate messages** to a **private moderation channel** that only you and the bot can see. No images at this stage.
+2. **You react** on that message: **1️⃣ 2️⃣ 3️⃣** approves that candidate, **❌** means none are good enough. On ❌ the bot immediately digs up 3 *new* candidates (a different slice of history, and never the ones you've already seen), and repeats until you approve one or hit the daily limit (`THROWBACK_MAX_ROUNDS`, default 5).
+3. **When you approve one**, the bot holds on to it and posts it in your throwback channel at a **random time between 11am and 3pm**. If you approve after 3pm it's too late for that day. At post time the AI (if on) adds a one-line comment and an illustration (`OPENAI_API_KEY`), exactly as before.
+4. **If you don't approve anything** before 3pm, there is no throwback that day. The next day starts fresh at 10am.
 
-**Fallbacks.** If the AI is off, hits the cost cap, errors, or gives an unusable answer, the bot picks randomly from the 10 most-reacted messages, as before. If only the image fails or is over budget, the post goes out with the text and comment but no image.
+If the bot restarts, nothing is lost: the candidates, your choice and its post time are stored in the database (table `throwback_rounds`: message IDs and dates only, no message text). If the bot is offline at the planned time and back after 3:10pm, it skips that day and tells the moderation channel. Messages you rejected are not offered again (unless there is nothing else left), and a message that has been posted is never picked again.
 
-It skips bots, commands, link-only messages, very short or very long messages and `@everyone`/`@here` messages. **Redrawing.** Each window gets a random length (half to full `THROWBACK_WINDOW_DAYS`) and a random position, and never overlaps a window already tried. If a window has fewer than `THROWBACK_MIN_MESSAGES` (default 10) usable messages, the bot throws it away and draws another, up to `THROWBACK_MAX_ATTEMPTS` (default 40) times. If none reaches the minimum, it uses the best one it saw, as long as it had at least one usable message. Windows used on previous days are avoided too, and **a message that has been posted as a throwback is never picked again**. Both are remembered in the database (table `throwback_history`: just message IDs, dates and counts, no text), so redeploys don't reset them. If a channel is younger than the window length (say a 3-week-old channel with 60-day windows), its whole history is the only possible window, so it is searched once and the already-posted messages are skipped; only when every usable message has been posted does it allow a repeat. To start fresh, run `DELETE FROM throwback_history;`. **Nothing about the search is shown in the posts.** Instead, each post gets a row in `throwback_history` with the details, which you can check in Railway's Postgres Data/Query tab:
+**Setting it up.** Create a private text channel (only you and the bot can see it), copy its ID and set `THROWBACK_MOD_CHANNEL_ID`. The bot needs **View Channel, Send Messages, Embed Links, Add Reactions and Read Message History** there (Administrator covers it). **Without `THROWBACK_MOD_CHANNEL_ID` the throwback is switched off entirely**, so nothing can ever be posted unapproved. `THROWBACK_CHANNEL_ID` stays the public channel the approved throwback is posted in (and, unless `THROWBACK_SOURCE_CHANNEL_ID` says otherwise, the channel history is read from). Anyone who can see the moderation channel can approve, so keep it private.
+
+**How the candidates are chosen.** The bot collects a pool of up to about 140 messages from the slice (the 40 most-reacted plus a random sample of the rest, so funny messages nobody reacted to still get a chance). With the AI on, the model shortlists the 3 funniest or most interesting (one cheap call, no image). Without the AI, or if it errors or hits the cost cap, 3 are picked at random from the 10 most-reacted. It skips bots, commands, link-only messages, very short or very long messages and `@everyone`/`@here` messages. If a slice has fewer than `THROWBACK_MIN_MESSAGES` (default 10) usable messages, the bot draws another, up to `THROWBACK_MAX_ATTEMPTS` (default 40) times; slices already used on earlier days are avoided; a channel younger than the slice length is searched whole. If a search finds nothing, or something is misconfigured, the bot says so in the moderation channel and retries a few minutes later (up to 3 times a day).
+
+**Checking the search.** Nothing about the search is shown in public. Each round's details are stored in `throwback_rounds` (and the posted one in `throwback_history`); look at them in Railway's Postgres Data/Query tab:
 
 ```sql
--- the last 20 throwbacks: when, which slice of history was searched, how it went
-SELECT posted_at::date AS posted, window_start::date AS from_date, window_end::date AS to_date,
-       eligible, attempts, channel_days, whole_channel, ai_pick, message_id
-FROM throwback_history ORDER BY id DESC LIMIT 20;
--- every window tried for the latest one (windows_tried is JSON: start, end, scanned, eligible)
-SELECT windows_tried FROM throwback_history ORDER BY id DESC LIMIT 1;
+-- today's and recent rounds: what you decided and how the search went
+SELECT day, round_no, status, chosen_id, post_at, window_start::date AS from_date, window_end::date AS to_date,
+       eligible, attempts, channel_days, whole_channel, ai_pick
+FROM throwback_rounds ORDER BY id DESC LIMIT 20;
 ```
 
-`whole_channel = true` means the channel was younger than the window, so all of it was searched. `ai_pick` says whether the AI chose the message. The deploy logs also have `Throwback attempt …` and `Throwback window chosen: …` lines. Empty windows are quick to check, but a busy 60-day window means a lot of reading, so a run can take several minutes. Threads are not searched.
+**Commands.** `!throwback` (Manage Server) sends a fresh set of 3 candidates to the moderation channel right now, replacing any set still waiting for a choice. It's handy for testing. Approving one still posts it at a random time between 11am and 3pm, or not at all if it's already past 3pm.
 
-**Cost.** The judging call defaults to Claude Sonnet 5.5 (`LLM_THROWBACK_MODEL`), since judging humour is the point of it: roughly 10-20k input tokens, a few cents a day. Set it to `claude-haiku-4-5-20251001` to make it cheaper. The image is billed like any other (see Image generation). Both count toward the spending caps, and the image reserves `IMAGE_MAX_COST_USD` first, so make sure `LLM_DAILY_BUDGET_USD` leaves room.
+**Cost.** The shortlist call is small (a few cents at most); the comment call at post time is tiny, and the image is billed like any other (see Image generation). The shortlist and comment use `LLM_THROWBACK_MODEL` (default Claude Sonnet 5.5; set `claude-haiku-4-5-20251001` to make it cheaper). All of it counts toward the spending caps.
 
-The bot needs **View Channel**, **Read Message History**, **Send Messages** and **Attach Files** in that channel. `!throwback` always posts in the throwback channel, wherever you type it. The schedule is picked fresh after every restart; the bot checks the channel for today's throwback first, so a redeploy won't cause a second post that day. The next run time is printed in the deploy logs (`Next throwback at ...`).
-
-Options: `THROWBACK_CHANNEL_ID`, `THROWBACK_START_HOUR` (default 10), `THROWBACK_END_HOUR` (default 15) and `THROWBACK_TIMEZONE` (default `Europe/London`; use any IANA name like `America/New_York`; summer time is handled for you), `THROWBACK_WINDOW_DAYS` (default 60), `THROWBACK_MIN_MESSAGES`, `THROWBACK_MAX_ATTEMPTS`, `THROWBACK_AI_PICK` (true/false), `THROWBACK_IMAGE` (true/false), `LLM_THROWBACK_MODEL`, and optionally `THROWBACK_SOURCE_CHANNEL_ID` to read history from a different channel than the one it posts in. For safety, the bot refuses to post if the channel it reads from is NSFW and the one it posts in isn't.
+Options: `THROWBACK_CHANNEL_ID`, `THROWBACK_MOD_CHANNEL_ID`, `THROWBACK_SCAN_HOUR` (default 10), `THROWBACK_START_HOUR` (default 11), `THROWBACK_END_HOUR` (default 15), `THROWBACK_TIMEZONE` (default `Europe/London`; summer time is handled for you), `THROWBACK_MAX_ROUNDS` (default 5), `THROWBACK_WINDOW_DAYS` (default 60), `THROWBACK_MIN_MESSAGES`, `THROWBACK_MAX_ATTEMPTS`, `THROWBACK_AI_PICK` (true/false: shortlist and comment), `THROWBACK_IMAGE` (true/false), `LLM_THROWBACK_MODEL`, and optionally `THROWBACK_SOURCE_CHANNEL_ID`. For safety, the bot refuses to proceed if the channel it reads from is NSFW and the one it posts in isn't. Threads are not searched.
 
 ## AI chat and memory
 

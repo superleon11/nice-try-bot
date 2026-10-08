@@ -63,6 +63,33 @@ ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS channel_days  INTEGER;
 ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS whole_channel BOOLEAN;
 ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS ai_pick       BOOLEAN;
 ALTER TABLE throwback_history ADD COLUMN IF NOT EXISTS windows_tried TEXT;
+
+-- Moderated throwbacks: each round is a set of candidates sent to the private moderation channel.
+-- status: open (waiting for a choice), approved (waiting for its post time), posted, rejected
+-- (moderator said none are good), failed (approved message couldn't be posted), expired.
+-- candidates is JSON: [{"id": message id, "channel_id": channel id}]. No message text is stored.
+CREATE TABLE IF NOT EXISTS throwback_rounds (
+    id                 SERIAL PRIMARY KEY,
+    day                DATE NOT NULL,
+    round_no           INTEGER NOT NULL,
+    mod_message_id     BIGINT,
+    candidates         TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'open',
+    chosen_id          BIGINT,
+    chosen_channel_id  BIGINT,
+    post_at            TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    window_start       TIMESTAMPTZ,
+    window_end         TIMESTAMPTZ,
+    eligible           INTEGER,
+    attempts           INTEGER,
+    channel_days       INTEGER,
+    whole_channel      BOOLEAN,
+    ai_pick            BOOLEAN,
+    windows_tried      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_throwback_rounds_day ON throwback_rounds (day);
+CREATE INDEX IF NOT EXISTS idx_throwback_rounds_mod ON throwback_rounds (mod_message_id);
 """
 
 # Whitelist so a metric name can never be used for SQL injection.
@@ -229,6 +256,58 @@ class Database:
                 whole_channel, ai_pick, windows_tried,
             )
 
+    async def add_round(self, day, round_no: int, candidates: str, *, window_start=None, window_end=None,
+                        eligible=None, attempts=None, channel_days=None, whole_channel=None, ai_pick=None,
+                        windows_tried=None) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """INSERT INTO throwback_rounds
+                       (day, round_no, candidates, window_start, window_end, eligible, attempts,
+                        channel_days, whole_channel, ai_pick, windows_tried)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id""",
+                day, round_no, candidates, window_start, window_end, eligible, attempts, channel_days,
+                whole_channel, ai_pick, windows_tried)
+
+    async def set_round_mod_message(self, round_id: int, mod_message_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE throwback_rounds SET mod_message_id = $2 WHERE id = $1",
+                               round_id, mod_message_id)
+
+    async def rounds_for_day(self, day) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM throwback_rounds WHERE day = $1 ORDER BY id", day)
+        return [dict(r) for r in rows]
+
+    async def round_by_mod_message(self, mod_message_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM throwback_rounds WHERE mod_message_id = $1", mod_message_id)
+        return dict(row) if row else None
+
+    async def change_round_status(self, round_id: int, expected: str, new: str, *, chosen_id=None,
+                                  chosen_channel_id=None, post_at=None) -> bool:
+        """Move a round from `expected` to `new`. False if it was no longer in `expected` (so two
+        quick reactions can't both win)."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """UPDATE throwback_rounds SET status = $3, chosen_id = COALESCE($4, chosen_id),
+                       chosen_channel_id = COALESCE($5, chosen_channel_id), post_at = COALESCE($6, post_at)
+                   WHERE id = $1 AND status = $2""",
+                round_id, expected, new, chosen_id, chosen_channel_id, post_at)
+        return result.endswith(" 1")
+
+    async def proposed_throwback_ids(self) -> set[int]:
+        """Every message ever shown to the moderator (so rejected ones aren't offered again)."""
+        import json
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT candidates FROM throwback_rounds")
+        ids = set()
+        for r in rows:
+            try:
+                ids.update(int(c["id"]) for c in json.loads(r["candidates"]))
+            except (ValueError, KeyError, TypeError):
+                pass
+        return ids
+
     async def posted_throwback_ids(self) -> set[int]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT message_id FROM throwback_history")
@@ -238,9 +317,13 @@ class Database:
         """(start, end) of the slices of history used for the most recent throwbacks."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                """SELECT window_start, window_end FROM throwback_history
+                """SELECT window_start, window_end FROM (
+                       SELECT window_start, window_end, posted_at AS at FROM throwback_history
+                       UNION ALL
+                       SELECT window_start, window_end, created_at AS at FROM throwback_rounds
+                   ) w
                    WHERE window_start IS NOT NULL AND window_end IS NOT NULL
-                   ORDER BY id DESC LIMIT $1""", limit)
+                   ORDER BY at DESC LIMIT $1""", limit)
         return [(r["window_start"], r["window_end"]) for r in rows]
 
     async def llm_spend_since(self, since, purpose: str | None = None) -> float:

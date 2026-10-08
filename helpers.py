@@ -456,3 +456,65 @@ def format_recall_prompt(request: str, entries: list[tuple[str, str, int, str]])
         tag = f"{author}, {when}" + (f", {reactions} reactions" if reactions else "")
         lines.append(f"[{i}] ({tag}) {' '.join(text.split())}")
     return f"Their request: {' '.join(request.split())}\n\nMessages:\n" + "\n".join(lines)
+
+
+# ---- moderated throwback --------------------------------------------------------------------------
+
+TOP_RULES = (
+    "You are shortlisting candidates for the Throwback of the Day in a friend-group Discord server. A "
+    "human moderator will make the final choice. You will be shown a numbered list of old messages with "
+    "their authors and reaction counts (reactions are only a hint). Choose the {k} funniest or most "
+    "interesting ones: messages that stand alone without context and would make the group laugh or "
+    "reminisce. Prefer variety (different people, different kinds of funny). "
+    'Reply with ONLY JSON: {{"picks": [<number>, <number>, <number>]}}'
+)
+
+
+def parse_top_reply(raw: str, n: int, k: int = 3) -> list[int]:
+    """Indexes (0-based, no repeats, at most k) from a {"picks": [...]} reply. [] if unusable."""
+    if not raw:
+        return []
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        picks = json.loads(raw[start:end + 1])["picks"]
+        out = []
+        for p in picks:
+            i = int(p) - 1
+            if 0 <= i < n and i not in out:
+                out.append(i)
+        return out[:k]
+    except (ValueError, KeyError, TypeError):
+        return []
+
+
+def throwback_action(now: datetime, tz, rounds: list[dict], scan_hour: int, end_hour: int,
+                     max_rounds: int, grace_minutes: int = 10) -> str | None:
+    """What should the throwback do right now? Looks only at today's rounds (dicts with 'status' and,
+    when approved, an aware 'post_at'). Returns one of:
+
+      'publish'         an approved message is due: post it in the main channel
+      'expire_approved' an approved message missed its time (the bot was down), so skip today
+      'expire_open'     the moderator didn't choose before the end of the window: no throwback today
+      'propose'         time to send a (new) set of candidates to the moderation channel
+      'limit'           too many rounds today, stop asking
+      None              nothing to do
+    """
+    local = now.astimezone(tz)
+    end = datetime.combine(local.date(), time(end_hour), tzinfo=tz).astimezone(timezone.utc)
+    scan = datetime.combine(local.date(), time(scan_hour), tzinfo=tz).astimezone(timezone.utc)
+    now_utc = now.astimezone(timezone.utc)
+    status = [r["status"] for r in rounds]
+    if "posted" in status:
+        return None
+    approved = [r for r in rounds if r["status"] == "approved"]
+    if approved:
+        if now_utc > end + timedelta(minutes=grace_minutes):
+            return "expire_approved"
+        return "publish" if now_utc >= approved[0]["post_at"] else None
+    if "open" in status:
+        return "expire_open" if now_utc >= end else None
+    if now_utc < scan or now_utc >= end:
+        return None
+    return "limit" if len(rounds) >= max_rounds else "propose"

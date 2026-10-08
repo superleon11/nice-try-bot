@@ -88,47 +88,12 @@ def test_bad_hours_are_rejected():
         pass
 
 
-# ---- the cog: did we already post today? ------------------------------------------------------
-def _channel_with(history):
-    ch = tc.TextChannel(1)
-
-    async def gen(limit=None):
-        for m in history:
-            yield m
-    ch.history = gen
-    return ch
-
-
-def _cog_with(channel):
-    bot = types.SimpleNamespace(get_channel=lambda cid: channel, get_cog=lambda n: None, command_prefix="!",
+# ---- the cog's defaults -------------------------------------------------------------------------
+def test_defaults_are_scan_10_post_11_to_15_london():
+    bot = types.SimpleNamespace(get_channel=lambda cid: None, get_cog=lambda n: None, command_prefix="!",
                                 user=types.SimpleNamespace(id=99))
-    return tc.throwback.Throwback(bot)
-
-
-def _msg(author_id, title, when):
-    return types.SimpleNamespace(author=types.SimpleNamespace(id=author_id), created_at=when,
-                                 embeds=[types.SimpleNamespace(title=title)])
-
-
-def test_detects_a_throwback_already_posted_today():
-    cog = _cog_with(_channel_with([_msg(99, "📼 Throwback of the Day", datetime.now(UTC))]))
-    assert asyncio.run(cog._posted_today()) is True
-
-
-def test_yesterdays_throwback_does_not_count():
-    old = datetime.now(UTC) - timedelta(days=1, hours=1)
-    cog = _cog_with(_channel_with([_msg(5, "something else", datetime.now(UTC)), _msg(99, "📼 Throwback of the Day", old)]))
-    assert asyncio.run(cog._posted_today()) is False
-
-
-def test_someone_elses_embed_does_not_count():
-    cog = _cog_with(_channel_with([_msg(5, "📼 Throwback of the Day", datetime.now(UTC))]))
-    assert asyncio.run(cog._posted_today()) is False
-
-
-def test_defaults_are_10_to_15_london():
-    cog = _cog_with(_channel_with([]))
-    assert (cog.start_hour, cog.end_hour) == (10, 15) and str(cog.tz) == "Europe/London"
+    cog = tc.throwback.Throwback(bot)
+    assert (cog.scan_hour, cog.start_hour, cog.end_hour) == (10, 11, 15) and str(cog.tz) == "Europe/London"
 
 
 if __name__ == "__main__":
