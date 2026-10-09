@@ -146,6 +146,20 @@ def test_windows_overlap():
     assert not windows_overlap((d(1), d(5)), (d(8), d(9)))
 
 
+def test_env_int_keeps_discord_ids_exact():
+    import os
+    from envutil import env_int
+    os.environ["X_ID"] = "1234567890123456789"       # an 19-digit snowflake: a float would corrupt it
+    try:
+        assert env_int("X_ID", 0) == 1234567890123456789
+        os.environ["X_ID"] = "12.0"
+        assert env_int("X_ID", 0) == 12
+        os.environ["X_ID"] = "junk"
+        assert env_int("X_ID", 7) == 7
+    finally:
+        del os.environ["X_ID"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

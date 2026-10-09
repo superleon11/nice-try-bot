@@ -532,6 +532,24 @@ def test_cannot_post_in_the_mod_channel_is_reported_not_silent():
     assert cog.db.rounds[0]["status"] == "failed"
 
 
+def test_channel_ids_from_the_environment_are_exact():
+    os.environ["THROWBACK_MOD_CHANNEL_ID"] = "1234567890123456789"
+    try:
+        assert make().mod_channel_id == 1234567890123456789
+    finally:
+        os.environ["THROWBACK_MOD_CHANNEL_ID"] = "2"
+
+
+def test_a_crash_while_searching_is_reported_to_the_mods():
+    cog = make()
+
+    async def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    cog.db.recent_throwback_windows = boom
+    assert run(cog.tick()) == "propose"
+    assert "db exploded" in cog.mod.sent[-1]["text"] and cog.main.sent == []
+
+
 def test_disabled_without_a_mod_channel():
     cog = make()
     cog.mod_channel_id = 0

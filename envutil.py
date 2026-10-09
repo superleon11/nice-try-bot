@@ -16,7 +16,12 @@ def env_float(name: str, default: float) -> float:
 
 
 def env_int(name: str, default: int) -> int:
-    return int(env_float(name, default))
+    # Parse as an integer first: going through float would corrupt Discord IDs (18-19 digits).
+    raw = os.getenv(name, "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return int(env_float(name, default))
 
 
 def env_bool(name: str, default: bool) -> bool:

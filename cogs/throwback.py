@@ -94,6 +94,15 @@ class Throwback(commands.Cog):
 
     async def _loop(self) -> None:
         await self.bot.wait_until_ready()
+        for label, cid in (("throwback channel", self.channel_id), ("moderation channel", self.mod_channel_id),
+                           ("source channel", self.source_id)):
+            channel = self.bot.get_channel(cid)
+            if channel is None:
+                log.error("Throwback: can't find the %s (ID %s). Is the ID right, and can the bot see it?", label, cid)
+            else:
+                log.info("Throwback: %s is #%s", label, getattr(channel, "name", cid))
+        log.info("Throwback: candidates go out from %02d:00, approved posts between %02d:00 and %02d:00 (%s)",
+                 self.scan_hour, self.start_hour, self.end_hour, self.tz)
         while True:
             try:
                 await self.tick()
@@ -127,7 +136,13 @@ class Throwback(commands.Cog):
             elif action == "propose":
                 if _time.monotonic() < self._retry_at or self._failures.get(day, 0) >= MAX_SEARCH_FAILURES:
                     return None
-                problem = await self._propose(day, len(rounds) + 1)
+                try:
+                    problem = await self._propose(day, len(rounds) + 1)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.exception("Throwback search crashed")
+                    problem = f"something went wrong ({type(exc).__name__}: {exc})."
                 if problem:
                     self._failures[day] = self._failures.get(day, 0) + 1
                     self._retry_at = _time.monotonic() + RETRY_SECONDS

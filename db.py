@@ -318,12 +318,12 @@ class Database:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """SELECT window_start, window_end FROM (
-                       SELECT window_start, window_end, posted_at AS at FROM throwback_history
+                       SELECT window_start, window_end, posted_at AS used_at FROM throwback_history
                        UNION ALL
-                       SELECT window_start, window_end, created_at AS at FROM throwback_rounds
+                       SELECT window_start, window_end, created_at AS used_at FROM throwback_rounds
                    ) w
                    WHERE window_start IS NOT NULL AND window_end IS NOT NULL
-                   ORDER BY at DESC LIMIT $1""", limit)
+                   ORDER BY used_at DESC LIMIT $1""", limit)
         return [(r["window_start"], r["window_end"]) for r in rows]
 
     async def llm_spend_since(self, since, purpose: str | None = None) -> float:
