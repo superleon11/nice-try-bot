@@ -82,10 +82,18 @@ class Throwback(commands.Cog):
                         "(nothing is posted without being approved first)")
         else:
             self._runner = asyncio.create_task(self._loop())
+            self._runner.add_done_callback(self._runner_stopped)
+            log.info("Throwback enabled: channel %s, moderation channel %s, source %s",
+                     self.channel_id, self.mod_channel_id, self.source_id)
 
     async def cog_unload(self) -> None:
         if self._runner is not None:
             self._runner.cancel()
+
+    @staticmethod
+    def _runner_stopped(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error("The throwback scheduler stopped unexpectedly", exc_info=task.exception())
 
     # ---- the daily state machine ----------------------------------------------------------------
 
@@ -94,15 +102,19 @@ class Throwback(commands.Cog):
 
     async def _loop(self) -> None:
         await self.bot.wait_until_ready()
-        for label, cid in (("throwback channel", self.channel_id), ("moderation channel", self.mod_channel_id),
-                           ("source channel", self.source_id)):
-            channel = self.bot.get_channel(cid)
-            if channel is None:
-                log.error("Throwback: can't find the %s (ID %s). Is the ID right, and can the bot see it?", label, cid)
-            else:
-                log.info("Throwback: %s is #%s", label, getattr(channel, "name", cid))
-        log.info("Throwback: candidates go out from %02d:00, approved posts between %02d:00 and %02d:00 (%s)",
-                 self.scan_hour, self.start_hour, self.end_hour, self.tz)
+        try:
+            for label, cid in (("throwback channel", self.channel_id), ("moderation channel", self.mod_channel_id),
+                               ("source channel", self.source_id)):
+                channel = self.bot.get_channel(cid)
+                if channel is None:
+                    log.error("Throwback: can't find the %s (ID %s). Is the ID right, and can the bot see it?",
+                              label, cid)
+                else:
+                    log.info("Throwback: %s is #%s", label, getattr(channel, "name", cid))
+            log.info("Throwback: candidates go out from %02d:00, approved posts between %02d:00 and %02d:00 (%s)",
+                     self.scan_hour, self.start_hour, self.end_hour, self.tz)
+        except Exception:
+            log.exception("Throwback startup check failed")
         while True:
             try:
                 await self.tick()
@@ -120,6 +132,8 @@ class Throwback(commands.Cog):
             rounds = await self.bot.db.rounds_for_day(day)
             action = throwback_action(datetime.now(timezone.utc), self.tz, rounds, self.scan_hour,
                                       self.end_hour, self.max_rounds)
+            if action:
+                log.info("Throwback: %s (round %d today)", action, len(rounds) + (action == "propose"))
             if action == "publish":
                 await self._publish(next(r for r in rounds if r["status"] == "approved"))
             elif action == "expire_approved":
@@ -374,7 +388,7 @@ class Throwback(commands.Cog):
         except Exception:
             log.exception("Could not record the throwback in the database")
 
-    # ---- command ----------------------------------------------------------------------------------
+    # ---- commands ----------------------------------------------------------------------------------
 
     @commands.command(name="throwback")
     @commands.guild_only()
@@ -397,6 +411,36 @@ class Throwback(commands.Cog):
             problem = await self._propose(day, len(rounds) + 1)
         if problem:
             await ctx.send(problem)
+
+
+    @commands.command(name="throwbackstatus")
+    @commands.guild_only()
+    @commands.has_permissions(manage_guild=True)
+    async def throwbackstatus(self, ctx: commands.Context) -> None:
+        """Show what the throwback is doing and why (for checking the setup)."""
+        now = datetime.now(timezone.utc)
+        lines = [f"Time for me: {now.astimezone(self.tz).strftime('%a %d %b %H:%M %Z')}. "
+                 f"Candidates from {self.scan_hour:02d}:00, posts between {self.start_hour:02d}:00 and "
+                 f"{self.end_hour:02d}:00, up to {self.max_rounds} rounds."]
+        for label, cid in (("Throwback channel", self.channel_id), ("Moderation channel", self.mod_channel_id),
+                           ("Source channel", self.source_id)):
+            ch = self.bot.get_channel(cid) if cid else None
+            lines.append(f"{label}: " + (f"#{ch.name}" if ch is not None else
+                                         f"NOT FOUND (ID {cid or 'not set'})"))
+        running = self._runner is not None and not self._runner.done()
+        lines.append("Scheduler: " + ("running" if running else "NOT running (needs THROWBACK_CHANNEL_ID and "
+                                                              "THROWBACK_MOD_CHANNEL_ID, then a restart)"))
+        try:
+            rounds = await self.bot.db.rounds_for_day(self._today())
+            lines.append("Today's rounds: " + (", ".join(f"#{r['round_no']} {r['status']}" for r in rounds) or "none yet"))
+            action = throwback_action(now, self.tz, rounds, self.scan_hour, self.end_hour, self.max_rounds)
+            lines.append(f"Next step: {action or 'nothing due right now'}"
+                         + (" (busy searching)" if self._lock.locked() else ""))
+        except Exception as exc:
+            lines.append(f"Could not read today's rounds from the database: {type(exc).__name__}: {exc}")
+        if self._failures.get(self._today()):
+            lines.append(f"Failed searches today: {self._failures[self._today()]}")
+        await ctx.send("\n".join(lines))
 
 
 async def setup(bot: commands.Bot) -> None:

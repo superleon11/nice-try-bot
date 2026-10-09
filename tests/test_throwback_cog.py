@@ -550,6 +550,40 @@ def test_a_crash_while_searching_is_reported_to_the_mods():
     assert "db exploded" in cog.mod.sent[-1]["text"] and cog.main.sent == []
 
 
+def test_the_real_scheduler_loop_sends_candidates_without_any_nudge():
+    cog = make()
+
+    async def ready():
+        return None
+    cog.bot.wait_until_ready = ready
+
+    async def go():
+        await cog.cog_load()
+        assert cog._runner is not None
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if cog.mod.sent:
+                break
+        await cog.cog_unload()
+    asyncio.run(go())
+    assert len(cog.mod.sent) == 1 and len(cog.mod.sent[0]["embeds"]) == 3
+
+
+def test_status_command_explains_the_state():
+    cog = make()
+    said = []
+
+    async def send(text):
+        said.append(text)
+    ctx = types.SimpleNamespace(send=send)
+    run(cog.throwbackstatus(ctx))
+    assert "Moderation channel: #general" in said[0] and "Next step: propose" in said[0]
+    assert "NOT running" in said[0] and "Today's rounds: none yet" in said[0]
+    cog.mod_channel_id = 424242
+    run(cog.throwbackstatus(ctx))
+    assert "NOT FOUND (ID 424242)" in said[1]
+
+
 def test_disabled_without_a_mod_channel():
     cog = make()
     cog.mod_channel_id = 0
